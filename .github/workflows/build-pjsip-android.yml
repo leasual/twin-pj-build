@@ -44,9 +44,18 @@ jobs:
           export ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/21.4.7075529
           echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME}" >> $GITHUB_ENV
           
+          # 添加 NDK 工具到 PATH
+          export PATH=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+          echo "PATH=${PATH}" >> $GITHUB_ENV
+          
           # 验证 NDK 安装
           ls -la ${ANDROID_NDK_HOME}
           echo "NDK 已安装在: ${ANDROID_NDK_HOME}"
+          
+          # 显示可用的编译器工具
+          ls -la ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/
+          which clang
+          which arm-linux-androideabi-gcc || echo "arm-linux-androideabi-gcc not found"
           
       # 使用仓库中的 PJSIP 代码，假设 PJSIP 代码在仓库根目录的 pjsip 文件夹中
       # 如果代码在不同位置，请调整下面的路径
@@ -102,6 +111,19 @@ jobs:
             
             # 配置和构建
             export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+            # 设置 OpenSSL 编译环境
+            # 在 NDK r21 中，我们需要使用 clang 而非传统的 GCC
+            export ANDROID_NDK_ROOT=${ANDROID_NDK_HOME}
+            export PATH=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+            
+            # 为 NDK r21 的 OpenSSL 编译创建符号链接，以兼容 OpenSSL 的构建系统
+            mkdir -p ${GITHUB_WORKSPACE}/bin
+            ln -sf ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi19-clang ${GITHUB_WORKSPACE}/bin/arm-linux-androideabi-gcc
+            ln -sf ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang ${GITHUB_WORKSPACE}/bin/aarch64-linux-android-gcc
+            ln -sf ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android19-clang ${GITHUB_WORKSPACE}/bin/i686-linux-android-gcc
+            ln -sf ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang ${GITHUB_WORKSPACE}/bin/x86_64-linux-android-gcc
+            export PATH=${GITHUB_WORKSPACE}/bin:$PATH
+            
             # 为 32 位架构使用特殊处理
             if [[ "$ABI" == "armeabi-v7a" || "$ABI" == "x86" ]]; then
               ./Configure $OPENSSL_ARCH -D__ANDROID_API__=19 --prefix=$GITHUB_WORKSPACE/libs/openssl-build/$ABI no-shared no-asm
@@ -208,36 +230,35 @@ jobs:
             export OPENSSL_DIR=$GITHUB_WORKSPACE/libs/openssl-build/$ABI
             export OPENH264_DIR=$GITHUB_WORKSPACE/libs/openh264-build/$ABI
             
+            # 配置 PJSIP 构建环境以静态链接 SSL 和 H264
+            export LDFLAGS="$LDFLAGS -L$OPENSSL_DIR/lib -L$OPENH264_DIR/lib -static-libstdc++"
+            export CFLAGS="$CFLAGS -I$OPENSSL_DIR/include -I$OPENH264_DIR/include"
+            export CPPFLAGS="$CPPFLAGS -I$OPENSSL_DIR/include -I$OPENH264_DIR/include"
+            
             if [[ "$ABI" == "armeabi-v7a" || "$ABI" == "x86" ]]; then
               TARGET_ABI=$TARGET_ABI ./configure-android \
                 --use-ndk-cflags \
                 --with-ssl=$OPENSSL_DIR \
                 --with-openh264=$OPENH264_DIR \
                 --min-sdk-version=19 \
-                --disable-libwebrtc \
-                --disable-shared
+                --disable-libwebrtc
             else
               TARGET_ABI=$TARGET_ABI ./configure-android \
                 --use-ndk-cflags \
                 --with-ssl=$OPENSSL_DIR \
                 --with-openh264=$OPENH264_DIR \
                 --min-sdk-version=21 \
-                --disable-libwebrtc \
-                --disable-shared
+                --disable-libwebrtc
             fi
             
             make dep && make clean && make
             
-            # 创建单一静态库
-            echo "Creating single static library for $ABI"
-            cd pjlib/lib
+            # 创建输出目录
             mkdir -p $GITHUB_WORKSPACE/output/pjsip/$ABI
             
-            # 收集所有的 .a 文件
-            find $GITHUB_WORKSPACE/pjproject -name "*.a" > $GITHUB_WORKSPACE/output/pjsip/$ABI/libs_list.txt
-            
-            # 使用 ar 命令合并所有静态库
-            ar -rcT $GITHUB_WORKSPACE/output/pjsip/$ABI/libpjsip-all.a $(cat $GITHUB_WORKSPACE/output/pjsip/$ABI/libs_list.txt)
+            # 复制编译好的动态库文件
+            echo "Copying PJSIP dynamic libraries for $ABI"
+            find . -name "*.so" | xargs -I{} cp {} $GITHUB_WORKSPACE/output/pjsip/$ABI/
             
             # 验证生成的库
             ls -la $GITHUB_WORKSPACE/output/pjsip/$ABI/
