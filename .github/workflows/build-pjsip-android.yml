@@ -57,6 +57,12 @@ jobs:
           which clang
           which arm-linux-androideabi-gcc || echo "arm-linux-androideabi-gcc not found"
           
+          # 确保工作空间的bin目录创建成功
+          mkdir -p ${GITHUB_WORKSPACE}/bin
+          chmod 755 ${GITHUB_WORKSPACE}/bin
+          echo "创建 ${GITHUB_WORKSPACE}/bin 目录"
+          ls -la ${GITHUB_WORKSPACE}
+          
       # 使用仓库中的 PJSIP 代码，假设 PJSIP 代码在仓库根目录的 pjsip 文件夹中
       # 如果代码在不同位置，请调整下面的路径
       - name: Setup PJSIP
@@ -88,6 +94,10 @@ jobs:
           tar -xzf openssl-${OPENSSL_VERSION}.tar.gz
           cd openssl-${OPENSSL_VERSION}
           
+          # 确保工作空间 bin 目录存在
+          mkdir -p ${GITHUB_WORKSPACE}/bin
+          chmod 755 ${GITHUB_WORKSPACE}/bin
+          
           # 只为 ARM 架构构建 OpenSSL
           for ABI in armeabi-v7a arm64-v8a; do
             echo "Building OpenSSL for $ABI"
@@ -97,12 +107,6 @@ jobs:
                 ;;
               arm64-v8a)
                 OPENSSL_ARCH="android-arm64"
-                ;;
-              x86)
-                OPENSSL_ARCH="android-x86"
-                ;;
-              x86_64)
-                OPENSSL_ARCH="android-x86_64"
                 ;;
             esac
             
@@ -116,16 +120,19 @@ jobs:
             export ANDROID_NDK_ROOT=${ANDROID_NDK_HOME}
             export PATH=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
             
-            # 在 armeabi-v7a 中创建符号链接
+            # 为 NDK r21 的 OpenSSL 编译创建符号链接，以兼容 OpenSSL 的构建系统
             if [[ "$ABI" == "armeabi-v7a" ]]; then
               ln -sf ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi19-clang ${GITHUB_WORKSPACE}/bin/arm-linux-androideabi-gcc
+              ls -la ${GITHUB_WORKSPACE}/bin/
               export PATH=${GITHUB_WORKSPACE}/bin:$PATH
-              which arm-linux-androideabi-gcc || echo "Failed to create symlink for arm-linux-androideabi-gcc"
-            # 在 arm64-v8a 中创建符号链接
+              echo "Current PATH: $PATH"
+              which arm-linux-androideabi-gcc || echo "arm-linux-androideabi-gcc not found in PATH after creating symlink"
             elif [[ "$ABI" == "arm64-v8a" ]]; then
               ln -sf ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang ${GITHUB_WORKSPACE}/bin/aarch64-linux-android-gcc
+              ls -la ${GITHUB_WORKSPACE}/bin/
               export PATH=${GITHUB_WORKSPACE}/bin:$PATH
-              which aarch64-linux-android-gcc || echo "Failed to create symlink for aarch64-linux-android-gcc"
+              echo "Current PATH: $PATH"
+              which aarch64-linux-android-gcc || echo "aarch64-linux-android-gcc not found in PATH after creating symlink"
             fi
             
             # 为 32 位架构使用特殊处理
@@ -149,6 +156,10 @@ jobs:
           git clone -b v${OPENH264_VERSION} --depth 1 https://github.com/cisco/openh264.git openh264-${OPENH264_VERSION}
           cd openh264-${OPENH264_VERSION}
           
+          # 确保工作空间目录存在
+          mkdir -p $GITHUB_WORKSPACE/bin
+          chmod 755 $GITHUB_WORKSPACE/bin
+          
           # 只为 ARM 架构构建 OpenH264
           for ABI in armeabi-v7a arm64-v8a; do
             echo "Building OpenH264 for $ABI"
@@ -158,12 +169,6 @@ jobs:
                 ;;
               arm64-v8a)
                 OPENH264_ARCH="arm64"
-                ;;
-              x86)
-                OPENH264_ARCH="x86"
-                ;;
-              x86_64)
-                OPENH264_ARCH="x86_64"
                 ;;
             esac
             
@@ -183,7 +188,6 @@ jobs:
               export TARGET_ARCH=arm64
             fi
             
-            # 构建
             # 为 32 位架构使用较低的 API 级别，并确保生成静态库
             if [[ "$ABI" == "armeabi-v7a" ]]; then
               make clean
@@ -219,12 +223,6 @@ jobs:
               arm64-v8a)
                 TARGET_ABI="arm64-v8a"
                 ;;
-              x86)
-                TARGET_ABI="x86"
-                ;;
-              x86_64)
-                TARGET_ABI="x86_64"
-                ;;
             esac
             
             export OPENSSL_DIR=$GITHUB_WORKSPACE/libs/openssl-build/$ABI
@@ -234,6 +232,17 @@ jobs:
             export LDFLAGS="$LDFLAGS -L$OPENSSL_DIR/lib -L$OPENH264_DIR/lib -static-libstdc++"
             export CFLAGS="$CFLAGS -I$OPENSSL_DIR/include -I$OPENH264_DIR/include"
             export CPPFLAGS="$CPPFLAGS -I$OPENSSL_DIR/include -I$OPENH264_DIR/include"
+            
+            # 在构建后修改配置以禁用 MediaCodec 优先级
+            # if [ -f "pjlib/include/pj/config_site.h" ]; then
+            #   echo "正在修改 config_site.h 以禁用 MediaCodec..."
+            #   echo "#define PJMEDIA_VIDEO_DEV_HAS_ANDROID_MEDIACODEC 0" >> pjlib/include/pj/config_site.h
+            #   echo "#define PJMEDIA_HAS_ANDROID_MEDIACODEC 0" >> pjlib/include/pj/config_site.h
+            #   echo "#define PJMEDIA_VIDEO_DEV_HAS_ANDROID 1" >> pjlib/include/pj/config_site.h
+            #   cat pjlib/include/pj/config_site.h
+            # else
+            #   echo "警告: 找不到 config_site.h 文件"
+            # fi
             
             if [[ "$ABI" == "armeabi-v7a" ]]; then
               TARGET_ABI=$TARGET_ABI ./configure-android \
@@ -251,6 +260,19 @@ jobs:
                 --min-sdk-version=21 \
                 --disable-libwebrtc \
                 --disable-android-mediacodec
+            fi
+            
+            # 修改 PJSIP 的构建配置以静态链接 OpenSSL 和 OpenH264
+            if [ -f "pjlib/build/os-auto.mak" ]; then
+              echo "配置 PJSIP 以静态链接依赖库"
+              
+              # 修改链接选项，确保静态链接 OpenSSL 和 OpenH264
+              sed -i 's|-lssl|-l:libssl.a|g' `find . -name "*.mak"`
+              sed -i 's|-lcrypto|-l:libcrypto.a|g' `find . -name "*.mak"`
+              sed -i 's|-lopenh264|-l:libopenh264.a|g' `find . -name "*.mak"`
+              
+              # 确保使用绝对路径
+              sed -i "s|-L/|-L$OPENSSL_DIR/lib -L$OPENH264_DIR/lib -L/|g" `find . -name "*.mak"`
             fi
             
             make dep && make clean && make
