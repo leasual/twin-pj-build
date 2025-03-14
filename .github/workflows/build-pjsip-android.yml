@@ -88,8 +88,8 @@ jobs:
           tar -xzf openssl-${OPENSSL_VERSION}.tar.gz
           cd openssl-${OPENSSL_VERSION}
           
-          # 为每个 Android 架构构建 OpenSSL
-          for ABI in armeabi-v7a arm64-v8a x86 x86_64; do
+          # 只为 ARM 架构构建 OpenSSL
+          for ABI in armeabi-v7a arm64-v8a; do
             echo "Building OpenSSL for $ABI"
             case $ABI in
               armeabi-v7a)
@@ -116,16 +116,20 @@ jobs:
             export ANDROID_NDK_ROOT=${ANDROID_NDK_HOME}
             export PATH=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
             
-            # 为 NDK r21 的 OpenSSL 编译创建符号链接，以兼容 OpenSSL 的构建系统
-            mkdir -p ${GITHUB_WORKSPACE}/bin
-            ln -sf ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi19-clang ${GITHUB_WORKSPACE}/bin/arm-linux-androideabi-gcc
-            ln -sf ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang ${GITHUB_WORKSPACE}/bin/aarch64-linux-android-gcc
-            ln -sf ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android19-clang ${GITHUB_WORKSPACE}/bin/i686-linux-android-gcc
-            ln -sf ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang ${GITHUB_WORKSPACE}/bin/x86_64-linux-android-gcc
-            export PATH=${GITHUB_WORKSPACE}/bin:$PATH
+            # 在 armeabi-v7a 中创建符号链接
+            if [[ "$ABI" == "armeabi-v7a" ]]; then
+              ln -sf ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi19-clang ${GITHUB_WORKSPACE}/bin/arm-linux-androideabi-gcc
+              export PATH=${GITHUB_WORKSPACE}/bin:$PATH
+              which arm-linux-androideabi-gcc || echo "Failed to create symlink for arm-linux-androideabi-gcc"
+            # 在 arm64-v8a 中创建符号链接
+            elif [[ "$ABI" == "arm64-v8a" ]]; then
+              ln -sf ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang ${GITHUB_WORKSPACE}/bin/aarch64-linux-android-gcc
+              export PATH=${GITHUB_WORKSPACE}/bin:$PATH
+              which aarch64-linux-android-gcc || echo "Failed to create symlink for aarch64-linux-android-gcc"
+            fi
             
             # 为 32 位架构使用特殊处理
-            if [[ "$ABI" == "armeabi-v7a" || "$ABI" == "x86" ]]; then
+            if [[ "$ABI" == "armeabi-v7a" ]]; then
               ./Configure $OPENSSL_ARCH -D__ANDROID_API__=19 --prefix=$GITHUB_WORKSPACE/libs/openssl-build/$ABI no-shared no-asm
             else
               ./Configure $OPENSSL_ARCH -D__ANDROID_API__=21 --prefix=$GITHUB_WORKSPACE/libs/openssl-build/$ABI no-shared
@@ -145,8 +149,8 @@ jobs:
           git clone -b v${OPENH264_VERSION} --depth 1 https://github.com/cisco/openh264.git openh264-${OPENH264_VERSION}
           cd openh264-${OPENH264_VERSION}
           
-          # 为每个 Android 架构构建 OpenH264
-          for ABI in armeabi-v7a arm64-v8a x86 x86_64; do
+          # 只为 ARM 架构构建 OpenH264
+          for ABI in armeabi-v7a arm64-v8a; do
             echo "Building OpenH264 for $ABI"
             case $ABI in
               armeabi-v7a)
@@ -177,19 +181,15 @@ jobs:
             elif [[ "$ABI" == "arm64-v8a" ]]; then
               export TARGET_ARCH_ABI=arm64-v8a
               export TARGET_ARCH=arm64
-            elif [[ "$ABI" == "x86" ]]; then
-              export TARGET_ARCH_ABI=x86
-              export TARGET_ARCH=x86
-            elif [[ "$ABI" == "x86_64" ]]; then
-              export TARGET_ARCH_ABI=x86_64
-              export TARGET_ARCH=x86_64
             fi
             
             # 构建
             # 为 32 位架构使用较低的 API 级别，并确保生成静态库
-            if [[ "$ABI" == "armeabi-v7a" || "$ABI" == "x86" ]]; then
+            if [[ "$ABI" == "armeabi-v7a" ]]; then
+              make clean
               make OS=android NDKROOT=$ANDROID_NDK TARGET=android-19 ARCH=$OPENH264_ARCH USE_ASM=Yes BUILDTYPE=Release ENABLE_STATIC=on ENABLE_SHARED=off -j$(nproc) install PREFIX=$GITHUB_WORKSPACE/libs/openh264-build/$ABI
             else
+              make clean
               make OS=android NDKROOT=$ANDROID_NDK TARGET=android-21 ARCH=$OPENH264_ARCH USE_ASM=Yes BUILDTYPE=Release ENABLE_STATIC=on ENABLE_SHARED=off -j$(nproc) install PREFIX=$GITHUB_WORKSPACE/libs/openh264-build/$ABI
             fi
           done
@@ -209,8 +209,8 @@ jobs:
           # 清理之前的构建
           make distclean || true
           
-          # 为每个 Android 架构构建 PJSIP
-          for ABI in armeabi-v7a arm64-v8a x86 x86_64; do
+          # 只为 ARM 架构构建 PJSIP
+          for ABI in armeabi-v7a arm64-v8a; do
             echo "Building PJSIP for $ABI"
             case $ABI in
               armeabi-v7a)
@@ -235,20 +235,22 @@ jobs:
             export CFLAGS="$CFLAGS -I$OPENSSL_DIR/include -I$OPENH264_DIR/include"
             export CPPFLAGS="$CPPFLAGS -I$OPENSSL_DIR/include -I$OPENH264_DIR/include"
             
-            if [[ "$ABI" == "armeabi-v7a" || "$ABI" == "x86" ]]; then
+            if [[ "$ABI" == "armeabi-v7a" ]]; then
               TARGET_ABI=$TARGET_ABI ./configure-android \
                 --use-ndk-cflags \
                 --with-ssl=$OPENSSL_DIR \
                 --with-openh264=$OPENH264_DIR \
                 --min-sdk-version=19 \
-                --disable-libwebrtc
+                --disable-libwebrtc \
+                --disable-android-mediacodec
             else
               TARGET_ABI=$TARGET_ABI ./configure-android \
                 --use-ndk-cflags \
                 --with-ssl=$OPENSSL_DIR \
                 --with-openh264=$OPENH264_DIR \
                 --min-sdk-version=21 \
-                --disable-libwebrtc
+                --disable-libwebrtc \
+                --disable-android-mediacodec
             fi
             
             make dep && make clean && make
