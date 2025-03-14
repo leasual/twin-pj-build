@@ -15,7 +15,7 @@ jobs:
       PJSIP_VERSION: 2.14.1  # 更新为你需要的 PJSIP 版本
       OPENSSL_VERSION: 3.3.1
       OPENH264_VERSION: 2.4.1
-      ANDROID_NDK_VERSION: r21e  # 使用较低版本的 NDK 以更好地支持 32 位架构
+      ANDROID_NDK_VERSION: "21.4.7075529"  # 使用 SDK Manager 可用的 NDK 版本
       
     steps:
       - name: Checkout repository
@@ -37,13 +37,16 @@ jobs:
         
       - name: Download and install Android NDK
         run: |
-          mkdir -p ${ANDROID_HOME}/ndk
-          cd ${ANDROID_HOME}/ndk
-          wget -q https://dl.google.com/android/repository/android-ndk-${ANDROID_NDK_VERSION}-linux.zip
-          unzip -q android-ndk-${ANDROID_NDK_VERSION}-linux.zip
-          mv android-ndk-${ANDROID_NDK_VERSION} ${ANDROID_NDK_VERSION}
-          export ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}
+          # 使用 sdkmanager 安装 NDK
+          echo "y" | sdkmanager --install "ndk;21.4.7075529"
+          
+          # 设置 NDK 路径
+          export ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/21.4.7075529
           echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME}" >> $GITHUB_ENV
+          
+          # 验证 NDK 安装
+          ls -la ${ANDROID_NDK_HOME}
+          echo "NDK 已安装在: ${ANDROID_NDK_HOME}"
           
       # 使用仓库中的 PJSIP 代码，假设 PJSIP 代码在仓库根目录的 pjsip 文件夹中
       # 如果代码在不同位置，请调整下面的路径
@@ -105,6 +108,8 @@ jobs:
             else
               ./Configure $OPENSSL_ARCH -D__ANDROID_API__=21 --prefix=$GITHUB_WORKSPACE/libs/openssl-build/$ABI no-shared
             fi
+            
+            # 构建静态库
             make -j$(nproc) clean
             make -j$(nproc)
             make install_sw
@@ -159,11 +164,11 @@ jobs:
             fi
             
             # 构建
-            # 为 32 位架构使用较低的 API 级别
+            # 为 32 位架构使用较低的 API 级别，并确保生成静态库
             if [[ "$ABI" == "armeabi-v7a" || "$ABI" == "x86" ]]; then
-              make OS=android NDKROOT=$ANDROID_NDK TARGET=android-19 ARCH=$OPENH264_ARCH USE_ASM=Yes BUILDTYPE=Release -j$(nproc) install PREFIX=$GITHUB_WORKSPACE/libs/openh264-build/$ABI
+              make OS=android NDKROOT=$ANDROID_NDK TARGET=android-19 ARCH=$OPENH264_ARCH USE_ASM=Yes BUILDTYPE=Release ENABLE_STATIC=on ENABLE_SHARED=off -j$(nproc) install PREFIX=$GITHUB_WORKSPACE/libs/openh264-build/$ABI
             else
-              make OS=android NDKROOT=$ANDROID_NDK TARGET=android-21 ARCH=$OPENH264_ARCH USE_ASM=Yes BUILDTYPE=Release -j$(nproc) install PREFIX=$GITHUB_WORKSPACE/libs/openh264-build/$ABI
+              make OS=android NDKROOT=$ANDROID_NDK TARGET=android-21 ARCH=$OPENH264_ARCH USE_ASM=Yes BUILDTYPE=Release ENABLE_STATIC=on ENABLE_SHARED=off -j$(nproc) install PREFIX=$GITHUB_WORKSPACE/libs/openh264-build/$ABI
             fi
           done
           
@@ -203,30 +208,42 @@ jobs:
             export OPENSSL_DIR=$GITHUB_WORKSPACE/libs/openssl-build/$ABI
             export OPENH264_DIR=$GITHUB_WORKSPACE/libs/openh264-build/$ABI
             
-            # 为 32 位和 64 位架构使用不同的配置参数
             if [[ "$ABI" == "armeabi-v7a" || "$ABI" == "x86" ]]; then
               TARGET_ABI=$TARGET_ABI ./configure-android \
                 --use-ndk-cflags \
                 --with-ssl=$OPENSSL_DIR \
                 --with-openh264=$OPENH264_DIR \
-                --min-sdk-version=19
+                --min-sdk-version=19 \
+                --disable-libwebrtc \
+                --disable-shared
             else
               TARGET_ABI=$TARGET_ABI ./configure-android \
                 --use-ndk-cflags \
                 --with-ssl=$OPENSSL_DIR \
                 --with-openh264=$OPENH264_DIR \
-                --min-sdk-version=21
+                --min-sdk-version=21 \
+                --disable-libwebrtc \
+                --disable-shared
             fi
             
             make dep && make clean && make
             
-            # 创建输出目录
+            # 创建单一静态库
+            echo "Creating single static library for $ABI"
+            cd pjlib/lib
             mkdir -p $GITHUB_WORKSPACE/output/pjsip/$ABI
             
-            # 复制编译好的库文件
-            find . -name "*.so" -o -name "*.a" | xargs -I{} cp {} $GITHUB_WORKSPACE/output/pjsip/$ABI/
+            # 收集所有的 .a 文件
+            find $GITHUB_WORKSPACE/pjproject -name "*.a" > $GITHUB_WORKSPACE/output/pjsip/$ABI/libs_list.txt
+            
+            # 使用 ar 命令合并所有静态库
+            ar -rcT $GITHUB_WORKSPACE/output/pjsip/$ABI/libpjsip-all.a $(cat $GITHUB_WORKSPACE/output/pjsip/$ABI/libs_list.txt)
+            
+            # 验证生成的库
+            ls -la $GITHUB_WORKSPACE/output/pjsip/$ABI/
             
             # 清理构建
+            cd $GITHUB_WORKSPACE/pjproject
             make distclean
           done
           
