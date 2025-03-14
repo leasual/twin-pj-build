@@ -1,0 +1,240 @@
+name: Build PJSIP for Android
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    env:
+      PJSIP_VERSION: 2.14.1  # 更新为你需要的 PJSIP 版本
+      OPENSSL_VERSION: 3.3.1
+      OPENH264_VERSION: 2.4.1
+      ANDROID_NDK_VERSION: r21e  # 使用较低版本的 NDK 以更好地支持 32 位架构
+      
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        
+      - name: Set up JDK
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+          
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential python3 python3-dev automake autoconf libtool pkg-config
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v2
+        
+      - name: Download and install Android NDK
+        run: |
+          mkdir -p ${ANDROID_HOME}/ndk
+          cd ${ANDROID_HOME}/ndk
+          wget -q https://dl.google.com/android/repository/android-ndk-${ANDROID_NDK_VERSION}-linux.zip
+          unzip -q android-ndk-${ANDROID_NDK_VERSION}-linux.zip
+          mv android-ndk-${ANDROID_NDK_VERSION} ${ANDROID_NDK_VERSION}
+          export ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}
+          echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME}" >> $GITHUB_ENV
+          
+      # 使用仓库中的 PJSIP 代码，假设 PJSIP 代码在仓库根目录的 pjsip 文件夹中
+      # 如果代码在不同位置，请调整下面的路径
+      - name: Setup PJSIP
+        run: |
+          # 如果 PJSIP 代码在仓库的根目录
+          if [ -d "$GITHUB_WORKSPACE/pjsip" ]; then
+            echo "Using PJSIP from repository at pjsip/"
+            mkdir -p $GITHUB_WORKSPACE/pjproject
+            cp -r $GITHUB_WORKSPACE/pjsip/* $GITHUB_WORKSPACE/pjproject/
+          # 如果 PJSIP 代码就是整个仓库内容
+          elif [ -f "$GITHUB_WORKSPACE/configure-android" ]; then
+            echo "Using PJSIP from repository root"
+            mkdir -p $GITHUB_WORKSPACE/pjproject
+            cp -r $GITHUB_WORKSPACE/* $GITHUB_WORKSPACE/pjproject/
+          # 如果找不到 PJSIP 代码，则从官方仓库克隆
+          else
+            echo "PJSIP code not found in repository, cloning from official repo"
+            git clone -b ${PJSIP_VERSION} --depth 1 https://github.com/pjsip/pjproject.git
+          fi
+          cd $GITHUB_WORKSPACE/pjproject
+          ls -la
+          
+      - name: Download and build OpenSSL
+        run: |
+          cd $GITHUB_WORKSPACE
+          mkdir -p libs
+          cd libs
+          wget -q https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz
+          tar -xzf openssl-${OPENSSL_VERSION}.tar.gz
+          cd openssl-${OPENSSL_VERSION}
+          
+          # 为每个 Android 架构构建 OpenSSL
+          for ABI in armeabi-v7a arm64-v8a x86 x86_64; do
+            echo "Building OpenSSL for $ABI"
+            case $ABI in
+              armeabi-v7a)
+                OPENSSL_ARCH="android-arm"
+                ;;
+              arm64-v8a)
+                OPENSSL_ARCH="android-arm64"
+                ;;
+              x86)
+                OPENSSL_ARCH="android-x86"
+                ;;
+              x86_64)
+                OPENSSL_ARCH="android-x86_64"
+                ;;
+            esac
+            
+            # 创建构建目录
+            mkdir -p $GITHUB_WORKSPACE/libs/openssl-build/$ABI
+            
+            # 配置和构建
+            export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+            # 为 32 位架构使用特殊处理
+            if [[ "$ABI" == "armeabi-v7a" || "$ABI" == "x86" ]]; then
+              ./Configure $OPENSSL_ARCH -D__ANDROID_API__=19 --prefix=$GITHUB_WORKSPACE/libs/openssl-build/$ABI no-shared no-asm
+            else
+              ./Configure $OPENSSL_ARCH -D__ANDROID_API__=21 --prefix=$GITHUB_WORKSPACE/libs/openssl-build/$ABI no-shared
+            fi
+            make -j$(nproc) clean
+            make -j$(nproc)
+            make install_sw
+          done
+          
+          echo "OpenSSL build completed"
+          
+      - name: Download and build OpenH264
+        run: |
+          cd $GITHUB_WORKSPACE/libs
+          git clone -b v${OPENH264_VERSION} --depth 1 https://github.com/cisco/openh264.git openh264-${OPENH264_VERSION}
+          cd openh264-${OPENH264_VERSION}
+          
+          # 为每个 Android 架构构建 OpenH264
+          for ABI in armeabi-v7a arm64-v8a x86 x86_64; do
+            echo "Building OpenH264 for $ABI"
+            case $ABI in
+              armeabi-v7a)
+                OPENH264_ARCH="arm"
+                ;;
+              arm64-v8a)
+                OPENH264_ARCH="arm64"
+                ;;
+              x86)
+                OPENH264_ARCH="x86"
+                ;;
+              x86_64)
+                OPENH264_ARCH="x86_64"
+                ;;
+            esac
+            
+            # 创建构建目录
+            mkdir -p $GITHUB_WORKSPACE/libs/openh264-build/$ABI
+            
+            # 设置环境变量
+            export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+            export ANDROID_NDK=$ANDROID_NDK_HOME
+            
+            # 为不同架构设置适当的编译器参数
+            if [[ "$ABI" == "armeabi-v7a" ]]; then
+              export TARGET_ARCH_ABI=armeabi-v7a
+              export TARGET_ARCH=arm
+            elif [[ "$ABI" == "arm64-v8a" ]]; then
+              export TARGET_ARCH_ABI=arm64-v8a
+              export TARGET_ARCH=arm64
+            elif [[ "$ABI" == "x86" ]]; then
+              export TARGET_ARCH_ABI=x86
+              export TARGET_ARCH=x86
+            elif [[ "$ABI" == "x86_64" ]]; then
+              export TARGET_ARCH_ABI=x86_64
+              export TARGET_ARCH=x86_64
+            fi
+            
+            # 构建
+            # 为 32 位架构使用较低的 API 级别
+            if [[ "$ABI" == "armeabi-v7a" || "$ABI" == "x86" ]]; then
+              make OS=android NDKROOT=$ANDROID_NDK TARGET=android-19 ARCH=$OPENH264_ARCH USE_ASM=Yes BUILDTYPE=Release -j$(nproc) install PREFIX=$GITHUB_WORKSPACE/libs/openh264-build/$ABI
+            else
+              make OS=android NDKROOT=$ANDROID_NDK TARGET=android-21 ARCH=$OPENH264_ARCH USE_ASM=Yes BUILDTYPE=Release -j$(nproc) install PREFIX=$GITHUB_WORKSPACE/libs/openh264-build/$ABI
+            fi
+          done
+          
+          echo "OpenH264 build completed"
+          
+      - name: Configure and build PJSIP for Android
+        run: |
+          cd $GITHUB_WORKSPACE/pjproject
+          
+          # 检查是否需要生成配置文件
+          if [ ! -f "configure" ]; then
+            echo "Running autoconf to generate configure script"
+            ACLOCAL_ARGS="-I /usr/share/aclocal" ./aconfigure
+          fi
+          
+          # 清理之前的构建
+          make distclean || true
+          
+          # 为每个 Android 架构构建 PJSIP
+          for ABI in armeabi-v7a arm64-v8a x86 x86_64; do
+            echo "Building PJSIP for $ABI"
+            case $ABI in
+              armeabi-v7a)
+                TARGET_ABI="armeabi-v7a"
+                ;;
+              arm64-v8a)
+                TARGET_ABI="arm64-v8a"
+                ;;
+              x86)
+                TARGET_ABI="x86"
+                ;;
+              x86_64)
+                TARGET_ABI="x86_64"
+                ;;
+            esac
+            
+            export OPENSSL_DIR=$GITHUB_WORKSPACE/libs/openssl-build/$ABI
+            export OPENH264_DIR=$GITHUB_WORKSPACE/libs/openh264-build/$ABI
+            
+            # 为 32 位和 64 位架构使用不同的配置参数
+            if [[ "$ABI" == "armeabi-v7a" || "$ABI" == "x86" ]]; then
+              TARGET_ABI=$TARGET_ABI ./configure-android \
+                --use-ndk-cflags \
+                --with-ssl=$OPENSSL_DIR \
+                --with-openh264=$OPENH264_DIR \
+                --min-sdk-version=19
+            else
+              TARGET_ABI=$TARGET_ABI ./configure-android \
+                --use-ndk-cflags \
+                --with-ssl=$OPENSSL_DIR \
+                --with-openh264=$OPENH264_DIR \
+                --min-sdk-version=21
+            fi
+            
+            make dep && make clean && make
+            
+            # 创建输出目录
+            mkdir -p $GITHUB_WORKSPACE/output/pjsip/$ABI
+            
+            # 复制编译好的库文件
+            find . -name "*.so" -o -name "*.a" | xargs -I{} cp {} $GITHUB_WORKSPACE/output/pjsip/$ABI/
+            
+            # 清理构建
+            make distclean
+          done
+          
+          echo "PJSIP build completed"
+          
+      - name: Archive PJSIP artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: pjsip-android-libs
+          path: ${{ github.workspace }}/output/pjsip
+          retention-days: 7
