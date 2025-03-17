@@ -312,7 +312,6 @@ jobs:
               --use-ndk-cflags \
               --with-ssl=$OPENSSL_DIR \
               --with-openh264=$OPENH264_DIR \
-              --disable-libwebrtc \
               --disable-android-mediacodec
             
             # 检查配置是否成功
