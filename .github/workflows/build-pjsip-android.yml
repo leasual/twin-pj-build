@@ -340,12 +340,33 @@ jobs:
                 --with-ssl=$OPENSSL_DIR \
                 --with-openh264=$OPENH264_DIR \
                 --disable-android-mediacodec \
-                --disable-libwebrtc
                 
               if [ $? -ne 0 ]; then
                 echo "配置仍然失败，退出构建"
                 exit 1
               fi
+            fi
+            
+            # 修改 PJSIP 的构建配置以静态链接 OpenSSL 和 OpenH264
+            if [ -f "pjlib/build/os-auto.mak" ]; then
+              echo "配置 PJSIP 以静态链接依赖库"
+              
+              # 修改链接选项，确保静态链接 OpenSSL 和 OpenH264
+              sed -i 's|-lssl|-l:libssl.a|g' `find . -name "*.mak"`
+              sed -i 's|-lcrypto|-l:libcrypto.a|g' `find . -name "*.mak"`
+              sed -i 's|-lopenh264|-l:libopenh264.a|g' `find . -name "*.mak"`
+              
+              # 确保使用绝对路径
+              sed -i "s|-L/|-L$OPENSSL_DIR/lib -L$OPENH264_DIR/lib -L/|g" `find . -name "*.mak"`
+              
+              # 额外检查并修改其他可能的链接选项
+              sed -i 's|-l ssl|-l:libssl.a|g' `find . -name "*.mak"`
+              sed -i 's|-l crypto|-l:libcrypto.a|g' `find . -name "*.mak"`
+              sed -i 's|-l openh264|-l:libopenh264.a|g' `find . -name "*.mak"`
+              
+              # 显示修改后的配置文件
+              echo "检查修改后的链接配置:"
+              grep -r "\-lssl\|\-lcrypto\|\-lopenh264\|libssl\|libcrypto\|libopenh264" --include="*.mak" .
             fi
             
             # 编译PJSIP
@@ -420,42 +441,57 @@ jobs:
           echo "复制Java文件，保持原目录结构..."
           # 首先确保目标目录存在
           mkdir -p $GITHUB_WORKSPACE/output/pjsua2/java
-
-          # 查找所有Java文件的根目录
-          JAVA_SRC_DIR=$(find . -name "*.java" | grep -i pjsua2 | head -1 | xargs dirname)
-          if [ -n "$JAVA_SRC_DIR" ]; then
-          echo "找到Java文件的根目录: $JAVA_SRC_DIR"
-          # 确定源目录
-          SOURCE_DIR=$(cd $JAVA_SRC_DIR/../.. && pwd)
-          echo "Java源目录: $SOURCE_DIR"
-            
-          # 复制整个org目录结构
-          if [ -d "$SOURCE_DIR/org" ]; then
-              echo "复制org目录到输出位置..."
-              cp -r $SOURCE_DIR/org $GITHUB_WORKSPACE/output/pjsua2/java/
-          else
-              echo "在 $SOURCE_DIR 中未找到org目录"
-                
-              # 如果没有找到org目录，尝试按文件复制
-              echo "尝试单独复制Java文件..."
-              find . -name "*.java" | while read file; do
-              # 获取文件相对路径
-              REL_PATH=$(echo $file | grep -o 'org/.*')
-              if [ -n "$REL_PATH" ]; then
-                  # 创建目标目录
-                  TARGET_DIR=$(dirname "$GITHUB_WORKSPACE/output/pjsua2/java/$REL_PATH")
-                  mkdir -p $TARGET_DIR
-                  # 复制文件
-                  cp $file "$GITHUB_WORKSPACE/output/pjsua2/java/$REL_PATH"
+          
+          # 方法1: 直接复制所有Java文件到目标目录，保持相对路径
+          find $GITHUB_WORKSPACE/pjproject -name "*.java" | while read file; do
+            # 检查文件是否包含org.pjsip.pjsua2包
+            if grep -q "package org.pjsip.pjsua2" "$file"; then
+              # 提取文件的目录部分
+              DIR_PART=$(dirname "$file")
+              # 获取包名对应的目录结构
+              PKG_STRUCT=$(grep -o "package .*;.*" "$file" | sed 's/package //g' | sed 's/;//g' | sed 's/\./\//g')
+              
+              # 如果能够获取包结构
+              if [ -n "$PKG_STRUCT" ]; then
+                # 创建对应的目标目录
+                TARGET_DIR="$GITHUB_WORKSPACE/output/pjsua2/java/$PKG_STRUCT"
+                mkdir -p "$(dirname "$TARGET_DIR")"
+                # 复制文件
+                cp "$file" "$GITHUB_WORKSPACE/output/pjsua2/java/$PKG_STRUCT.java"
+                echo "已复制 $file 到 $GITHUB_WORKSPACE/output/pjsua2/java/$PKG_STRUCT.java"
               else
-                  echo "无法确定 $file 的相对路径，直接复制到pjsua2目录"
-                  cp $file $GITHUB_WORKSPACE/output/pjsua2/java/org/pjsip/pjsua2/
+                # 如果无法从包名获取结构，尝试从文件路径中提取org/pjsip/pjsua2部分
+                REL_PATH=$(echo "$file" | grep -o "org/pjsip/pjsua2.*" || true)
+                if [ -n "$REL_PATH" ]; then
+                  TARGET_DIR="$GITHUB_WORKSPACE/output/pjsua2/java/$(dirname "$REL_PATH")"
+                  mkdir -p "$TARGET_DIR"
+                  cp "$file" "$GITHUB_WORKSPACE/output/pjsua2/java/$REL_PATH"
+                  echo "已复制 $file 到 $GITHUB_WORKSPACE/output/pjsua2/java/$REL_PATH"
+                else
+                  # 如果上述方法都失败，直接复制到默认目录
+                  cp "$file" "$GITHUB_WORKSPACE/output/pjsua2/java/org/pjsip/pjsua2/$(basename "$file")"
+                  echo "已复制 $file 到 $GITHUB_WORKSPACE/output/pjsua2/java/org/pjsip/pjsua2/$(basename "$file")"
+                fi
               fi
-              done
-          fi
-          else
-          echo "未找到任何Java文件"
-          fi
+            fi
+          done
+          
+          # 方法2: 尝试复制整个org目录结构
+          find $GITHUB_WORKSPACE/pjproject -path "*/org/pjsip" -type d | while read dir; do
+            if [ -d "$dir" ]; then
+              echo "找到org/pjsip目录: $dir"
+              # 获取上层目录(org所在目录)
+              ORG_DIR=$(dirname "$dir")
+              if [ -d "$ORG_DIR" ]; then
+                echo "复制org目录结构: $ORG_DIR -> $GITHUB_WORKSPACE/output/pjsua2/java/"
+                cp -r "$ORG_DIR" "$GITHUB_WORKSPACE/output/pjsua2/java/"
+              fi
+            fi
+          done
+          
+          # 验证复制结果
+          echo "验证Java文件复制结果:"
+          find $GITHUB_WORKSPACE/output/pjsua2/java -type f -name "*.java" | sort
           
           # 复制库文件
           for ABI in armeabi-v7a arm64-v8a; do
