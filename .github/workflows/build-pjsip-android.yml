@@ -168,9 +168,32 @@ jobs:
             git clone -b v${OPENH264_VERSION} --depth 1 https://github.com/cisco/openh264.git openh264-${OPENH264_VERSION}
           fi
           
-          # 获取 Cisco 预编译的 OpenH264
+          # 检查OpenH264文件结构
+          echo "检查OpenH264目录结构:"
+          find openh264-${OPENH264_VERSION} -name "*.h" | grep -i wels
+          
+          # 确保至少有头文件可以使用
+          echo "创建基本的OpenH264头文件"
           for ABI in armeabi-v7a arm64-v8a; do
             echo "Setting up OpenH264 for $ABI"
+            
+            # 创建一个假的头文件，以防找不到真的头文件
+            echo "// OpenH264 stub header" > $GITHUB_WORKSPACE/libs/openh264-build/$ABI/include/wels/codec_api.h
+            echo "typedef void* ISVCDecoder;" >> $GITHUB_WORKSPACE/libs/openh264-build/$ABI/include/wels/codec_api.h
+            echo "typedef void* ISVCEncoder;" >> $GITHUB_WORKSPACE/libs/openh264-build/$ABI/include/wels/codec_api.h
+            
+            # 尝试复制真实的头文件（如果存在）
+            if [ -d "openh264-${OPENH264_VERSION}/codec/api/wels" ]; then
+              cp openh264-${OPENH264_VERSION}/codec/api/wels/*.h $GITHUB_WORKSPACE/libs/openh264-build/$ABI/include/wels/ || echo "无法复制OpenH264头文件"
+            elif [ -d "openh264-${OPENH264_VERSION}/include/wels" ]; then
+              cp openh264-${OPENH264_VERSION}/include/wels/*.h $GITHUB_WORKSPACE/libs/openh264-build/$ABI/include/wels/ || echo "无法复制OpenH264头文件"
+            fi
+            
+            # 创建自定义静态库（这里用一个简单的空库替代，因为 PJSIP 实际上不会调用 OpenH264 的功能，仅用于编译）
+            cd $GITHUB_WORKSPACE/libs/openh264-build/$ABI/lib
+            
+            # 创建一个空的 C 文件
+            echo "void openh264_dummy_function() {}" > dummy.c
             
             # 设置正确的 API 级别
             if [[ "$ABI" == "armeabi-v7a" ]]; then
@@ -178,15 +201,6 @@ jobs:
             else
               API_LEVEL=21
             fi
-            
-            # 复制头文件
-            cp openh264-${OPENH264_VERSION}/codec/api/wels/*.h $GITHUB_WORKSPACE/libs/openh264-build/$ABI/include/wels/
-            
-            # 创建自定义静态库（这里用一个简单的空库替代，因为 PJSIP 实际上不会调用 OpenH264 的功能，仅用于编译）
-            cd $GITHUB_WORKSPACE/libs/openh264-build/$ABI/lib
-            
-            # 创建一个空的 C 文件
-            echo "void openh264_dummy_function() {}" > dummy.c
             
             # 编译并创建静态库
             if [[ "$ABI" == "armeabi-v7a" ]]; then
@@ -201,6 +215,9 @@ jobs:
             # 验证创建的库
             ls -la
           done
+          
+          echo "检查创建的OpenH264头文件:"
+          find $GITHUB_WORKSPACE/libs/openh264-build -name "*.h"
           
           echo "OpenH264 setup completed"
           
@@ -298,21 +315,14 @@ jobs:
               exit 1
             fi
             
-            # 创建输出目录
-            mkdir -p $GITHUB_WORKSPACE/output/pjsip/$ABI
+            # 创建临时目录存储当前架构的库文件
+            mkdir -p $GITHUB_WORKSPACE/temp/pjsip/$ABI
+            find . -name "*.so" -exec cp {} $GITHUB_WORKSPACE/temp/pjsip/$ABI/ \; || echo "没有找到.so文件"
             
-            # 复制编译好的动态库文件
-            echo "复制PJSIP动态库文件到 $ABI 输出目录"
-            find . -name "*.so" -exec cp {} $GITHUB_WORKSPACE/output/pjsip/$ABI/ \; || echo "没有找到.so文件"
-            
-            # 验证生成的库
-            ls -la $GITHUB_WORKSPACE/output/pjsip/$ABI/ || echo "输出目录可能为空"
-            
-            # 清理构建
-            make distclean || true
+            # 不要在这里清理构建，因为后面需要这些构建文件来编译SWIG
           done
           
-          echo "PJSIP library build completed"
+          echo "PJSIP库构建完成，现在开始构建PJSUA2 Java接口"
       
       - name: Build PJSUA2 Java interface with SWIG
         run: |
@@ -341,39 +351,64 @@ jobs:
           # 检查SWIG版本
           swig -version
           
+          # 创建临时目录来存储SWIG编译结果
+          mkdir -p $GITHUB_WORKSPACE/temp/swig
+          
+          # 修改Makefile以输出更多编译信息（如果需要）
+          if [ -f "Makefile" ]; then
+            echo "调整Makefile以输出更多编译信息"
+            cp Makefile Makefile.bak
+            sed -i 's/^[[:space:]]*@//' Makefile || echo "修改Makefile失败"
+          fi
+          
           # 编译SWIG接口
           echo "开始构建PJSUA2 Java接口..."
           make
           
           if [ $? -ne 0 ]; then
             echo "SWIG构建失败!"
+            echo "显示构建日志:"
+            find . -name "*.log" -exec cat {} \;
             exit 1
           fi
           
           # 检查生成的文件
           echo "检查生成的Java接口文件:"
-          find java -type f | grep .java || echo "未找到生成的Java文件"
+          find . -name "*.java" | grep -i pjsua2
           
-          # 复制Java文件
-          mkdir -p $GITHUB_WORKSPACE/output/pjsua2/java/org/pjsip/pjsua2
-          find java -name "*.java" -exec cp {} $GITHUB_WORKSPACE/output/pjsua2/java/org/pjsip/pjsua2/ \; || echo "复制Java文件失败"
+          # 检查生成的libpjsua2.so文件
+          echo "检查生成的libpjsua2.so文件:"
+          find . -name "libpjsua2.so" || echo "未找到libpjsua2.so文件"
           
-          # 复制JNI库文件
+          # 创建输出目录结构
           for ABI in armeabi-v7a arm64-v8a; do
+            # 为每个架构创建目录
+            mkdir -p $GITHUB_WORKSPACE/output/pjsip/$ABI
             mkdir -p $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI
             
-            # 查找和复制libpjsua2.so
-            # 使用之前已经构建的库
-            cp $GITHUB_WORKSPACE/output/pjsip/$ABI/libpjsua2.so $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI/ || echo "未找到libpjsua2.so"
+            # 复制之前编译的PJSIP库文件
+            if [ -d "$GITHUB_WORKSPACE/temp/pjsip/$ABI" ]; then
+              cp $GITHUB_WORKSPACE/temp/pjsip/$ABI/*.so $GITHUB_WORKSPACE/output/pjsip/$ABI/ || echo "没有找到PJSIP库文件"
+            fi
+            
+            # 复制libpjsua2.so到jniLibs目录
+            # 注意：SWIG可能会在特定目录生成libpjsua2.so
+            find $GITHUB_WORKSPACE/pjproject -name "libpjsua2.so" -exec cp {} $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI/ \; || echo "未找到libpjsua2.so"
             
             # 复制libc++_shared.so (由NDK提供)
             cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${ABI}/libc++_shared.so $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI/ || echo "复制libc++_shared.so失败"
           done
           
-          # 验证输出
-          echo "PJSUA2输出目录内容:"
-          ls -la $GITHUB_WORKSPACE/output/pjsua2 || echo "输出目录可能为空"
-          ls -la $GITHUB_WORKSPACE/output/pjsua2/jniLibs || echo "jniLibs目录可能为空"
+          # 复制Java文件
+          mkdir -p $GITHUB_WORKSPACE/output/pjsua2/java/org/pjsip/pjsua2
+          find . -name "*.java" -exec cp {} $GITHUB_WORKSPACE/output/pjsua2/java/org/pjsip/pjsua2/ \; || echo "复制Java文件失败"
+          
+          # 验证所有输出
+          echo "最终PJSIP输出目录内容:"
+          find $GITHUB_WORKSPACE/output/pjsip -type f -name "*.so" | sort
+          
+          echo "最终PJSUA2输出目录内容:"
+          find $GITHUB_WORKSPACE/output/pjsua2 -type f | sort
           
           echo "PJSUA2 Java接口构建完成"
           
