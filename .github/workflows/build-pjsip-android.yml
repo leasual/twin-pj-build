@@ -58,6 +58,12 @@ jobs:
           echo "创建 ${GITHUB_WORKSPACE}/bin 目录"
           ls -la ${GITHUB_WORKSPACE}
           
+          # 检查 NDK 18 的工具链结构
+          echo "检查 NDK 18 工具链结构:"
+          find ${ANDROID_HOME}/ndk/18.1.5063045 -name "*-gcc" | sort
+          find ${ANDROID_HOME}/ndk/18.1.5063045 -name "*-clang" | sort
+          find ${ANDROID_HOME}/ndk/18.1.5063045 -name "*-clang++" | sort
+          
       # 使用仓库中的 PJSIP 代码，假设 PJSIP 代码在仓库根目录的 pjsip 文件夹中
       # 如果代码在不同位置，请调整下面的路径
       - name: Setup PJSIP
@@ -86,6 +92,11 @@ jobs:
           export ANDROID_NDK_HOME=${NDK_HOME_32BIT}
           echo "使用32位NDK: $ANDROID_NDK_HOME"
           
+          # 检查可用编译器
+          echo "检查可用编译器:"
+          ls -la ${ANDROID_NDK_HOME}/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin/
+          ls -la ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/ || echo "llvm 工具链目录不存在"
+          
           # 构建32位OpenSSL
           cd $GITHUB_WORKSPACE
           mkdir -p libs
@@ -107,13 +118,14 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/libs/openssl-build/$ABI
             
           # 配置和构建
-          export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
-          # 设置 OpenSSL 编译环境
+          # 设置 OpenSSL 编译环境 (NDK 18 使用传统的 GCC 工具链)
           export ANDROID_NDK_ROOT=${ANDROID_NDK_HOME}
-          export PATH=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
-            
-          # 为 NDK 18 的 OpenSSL 编译创建符号链接
-          ln -sf ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi16-clang ${GITHUB_WORKSPACE}/bin/arm-linux-androideabi-gcc
+          
+          # NDK 18 使用的是传统 GCC，需要不同的设置
+          export PATH=${ANDROID_NDK_HOME}/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin:$PATH
+          
+          # 创建符号链接
+          ln -sf ${ANDROID_NDK_HOME}/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin/arm-linux-androideabi-gcc ${GITHUB_WORKSPACE}/bin/arm-linux-androideabi-gcc
           ls -la ${GITHUB_WORKSPACE}/bin/
           export PATH=${GITHUB_WORKSPACE}/bin:$PATH
           echo "Current PATH: $PATH"
@@ -157,11 +169,11 @@ jobs:
           # 创建一个空的 C 文件
           echo "void openh264_dummy_function() {}" > dummy.c
           
-          # 编译并创建静态库
-          ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi16-clang -c dummy.c -o dummy.o
+          # 编译并创建静态库 (使用传统GCC)
+          ${ANDROID_NDK_HOME}/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin/arm-linux-androideabi-gcc -c dummy.c -o dummy.o
           
           # 创建静态库
-          ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar rcs libopenh264.a dummy.o
+          ${ANDROID_NDK_HOME}/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin/arm-linux-androideabi-ar rcs libopenh264.a dummy.o
           
           # 验证创建的库
           ls -la
@@ -472,7 +484,12 @@ jobs:
             cp $GITHUB_WORKSPACE/output/pjsip/$ABI/libpjsua2.so $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI/ || echo "未找到libpjsua2.so"
             
             # 复制libc++_shared.so (由NDK提供)
-            cp ${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${ABI}/libc++_shared.so $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI/ || echo "复制libc++_shared.so失败"
+            if [[ "$ABI" == "armeabi-v7a" ]]; then
+              # NDK 18 的 libc++_shared.so 位置可能不同
+              find ${NDK_PATH} -name "libc++_shared.so" | grep $ABI | xargs -I{} cp {} $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI/ || echo "复制libc++_shared.so失败"
+            else
+              cp ${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${ABI}/libc++_shared.so $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI/ || echo "复制libc++_shared.so失败"
+            fi
           done
           
           # 验证输出
