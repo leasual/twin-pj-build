@@ -15,8 +15,7 @@ jobs:
       PJSIP_VERSION: 2.14.1  # 更新为你需要的 PJSIP 版本
       OPENSSL_VERSION: 3.3.1
       OPENH264_VERSION: 2.4.1
-      NDK_VERSION_32BIT: "18.1.5063045"  # 32位架构使用NDK 18
-      NDK_VERSION_64BIT: "21.4.7075529"  # 64位架构使用NDK 21
+      ANDROID_NDK_VERSION: "21.4.7075529"  # 统一使用 NDK 21
       
     steps:
       - name: Checkout repository
@@ -38,19 +37,18 @@ jobs:
         
       - name: Download and install Android NDK
         run: |
-          # 安装两个不同版本的NDK
-          echo "安装NDK 18 (32位架构用)"
-          echo "y" | sdkmanager --install "ndk;18.1.5063045"
-          
-          echo "安装NDK 21 (64位架构用)"
+          # 安装 NDK 21
           echo "y" | sdkmanager --install "ndk;21.4.7075529"
           
           # 验证安装
           ls -la ${ANDROID_HOME}/ndk
           
           # 设置环境变量
-          echo "NDK_HOME_32BIT=${ANDROID_HOME}/ndk/18.1.5063045" >> $GITHUB_ENV
-          echo "NDK_HOME_64BIT=${ANDROID_HOME}/ndk/21.4.7075529" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/21.4.7075529" >> $GITHUB_ENV
+          
+          # 添加 NDK 工具到 PATH
+          export PATH=${ANDROID_HOME}/ndk/21.4.7075529/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+          echo "PATH=${PATH}" >> $GITHUB_ENV
           
           # 确保工作空间的bin目录创建成功
           mkdir -p ${GITHUB_WORKSPACE}/bin
@@ -58,11 +56,9 @@ jobs:
           echo "创建 ${GITHUB_WORKSPACE}/bin 目录"
           ls -la ${GITHUB_WORKSPACE}
           
-          # 检查 NDK 18 的工具链结构
-          echo "检查 NDK 18 工具链结构:"
-          find ${ANDROID_HOME}/ndk/18.1.5063045 -name "*-gcc" | sort
-          find ${ANDROID_HOME}/ndk/18.1.5063045 -name "*-clang" | sort
-          find ${ANDROID_HOME}/ndk/18.1.5063045 -name "*-clang++" | sort
+          # 检查可用的编译器工具
+          echo "可用的编译器工具:"
+          ls -la ${ANDROID_HOME}/ndk/21.4.7075529/toolchains/llvm/prebuilt/linux-x86_64/bin/ | grep "arm"
           
       # 使用仓库中的 PJSIP 代码，假设 PJSIP 代码在仓库根目录的 pjsip 文件夹中
       # 如果代码在不同位置，请调整下面的路径
@@ -86,18 +82,8 @@ jobs:
           cd $GITHUB_WORKSPACE/pjproject
           ls -la
           
-      - name: Build OpenSSL and PJSIP for 32bit
+      - name: Download and build OpenSSL
         run: |
-          # 设置32位NDK环境变量
-          export ANDROID_NDK_HOME=${NDK_HOME_32BIT}
-          echo "使用32位NDK: $ANDROID_NDK_HOME"
-          
-          # 检查可用编译器
-          echo "检查可用编译器:"
-          ls -la ${ANDROID_NDK_HOME}/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin/
-          ls -la ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/ || echo "llvm 工具链目录不存在"
-          
-          # 构建32位OpenSSL
           cd $GITHUB_WORKSPACE
           mkdir -p libs
           cd libs
@@ -109,42 +95,67 @@ jobs:
           mkdir -p ${GITHUB_WORKSPACE}/bin
           chmod 755 ${GITHUB_WORKSPACE}/bin
           
-          # 构建32位架构的OpenSSL
-          ABI="armeabi-v7a"
-          echo "Building OpenSSL for $ABI with NDK 18"
-          OPENSSL_ARCH="android-arm"
+          # 为两种架构构建 OpenSSL
+          for ABI in armeabi-v7a arm64-v8a; do
+            echo "Building OpenSSL for $ABI"
+            case $ABI in
+              armeabi-v7a)
+                OPENSSL_ARCH="android-arm"
+                API_LEVEL=19
+                ;;
+              arm64-v8a)
+                OPENSSL_ARCH="android-arm64"
+                API_LEVEL=21
+                ;;
+            esac
             
-          # 创建构建目录
-          mkdir -p $GITHUB_WORKSPACE/libs/openssl-build/$ABI
+            # 创建构建目录
+            mkdir -p $GITHUB_WORKSPACE/libs/openssl-build/$ABI
             
-          # 配置和构建
-          # 设置 OpenSSL 编译环境 (NDK 18 使用传统的 GCC 工具链)
-          export ANDROID_NDK_ROOT=${ANDROID_NDK_HOME}
+            # 配置和构建
+            export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+            # 设置 OpenSSL 编译环境
+            export ANDROID_NDK_ROOT=${ANDROID_NDK_HOME}
+            
+            # 为 NDK 21 的 OpenSSL 编译创建符号链接
+            if [[ "$ABI" == "armeabi-v7a" ]]; then
+              # 创建指向 armv7a-linux-androideabi19-clang 的符号链接
+              ln -sf ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi${API_LEVEL}-clang ${GITHUB_WORKSPACE}/bin/arm-linux-androideabi-gcc
+              ls -la ${GITHUB_WORKSPACE}/bin/
+              export PATH=${GITHUB_WORKSPACE}/bin:$PATH
+              echo "Current PATH: $PATH"
+              which arm-linux-androideabi-gcc || echo "arm-linux-androideabi-gcc not found in PATH after creating symlink"
+            elif [[ "$ABI" == "arm64-v8a" ]]; then
+              # 创建指向 aarch64-linux-android21-clang 的符号链接
+              ln -sf ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${API_LEVEL}-clang ${GITHUB_WORKSPACE}/bin/aarch64-linux-android-gcc
+              ls -la ${GITHUB_WORKSPACE}/bin/
+              export PATH=${GITHUB_WORKSPACE}/bin:$PATH
+              echo "Current PATH: $PATH"
+              which aarch64-linux-android-gcc || echo "aarch64-linux-android-gcc not found in PATH after creating symlink"
+            fi
+            
+            # 配置 OpenSSL
+            ./Configure $OPENSSL_ARCH -D__ANDROID_API__=$API_LEVEL --prefix=$GITHUB_WORKSPACE/libs/openssl-build/$ABI no-shared
+            
+            # 构建静态库
+            make -j$(nproc) clean
+            make -j$(nproc)
+            make install_sw
+          done
           
-          # NDK 18 使用的是传统 GCC，需要不同的设置
-          export PATH=${ANDROID_NDK_HOME}/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin:$PATH
+          echo "OpenSSL build completed"
           
-          # 创建符号链接
-          ln -sf ${ANDROID_NDK_HOME}/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin/arm-linux-androideabi-gcc ${GITHUB_WORKSPACE}/bin/arm-linux-androideabi-gcc
-          ls -la ${GITHUB_WORKSPACE}/bin/
-          export PATH=${GITHUB_WORKSPACE}/bin:$PATH
-          echo "Current PATH: $PATH"
-          which arm-linux-androideabi-gcc || echo "arm-linux-androideabi-gcc not found in PATH after creating symlink"
-            
-          # 配置OpenSSL
-          ./Configure $OPENSSL_ARCH -D__ANDROID_API__=16 --prefix=$GITHUB_WORKSPACE/libs/openssl-build/$ABI no-shared no-asm
-            
-          # 构建静态库
-          make -j$(nproc) clean
-          make -j$(nproc)
-          make install_sw
-          
-          # 构建32位OpenH264
-          cd $GITHUB_WORKSPACE
+      - name: Download and build OpenH264
+        run: |
+          # 确保工作空间目录存在
+          mkdir -p $GITHUB_WORKSPACE/bin
+          chmod 755 $GITHUB_WORKSPACE/bin
           
           # 创建存放预编译 OpenH264 的目录结构
           mkdir -p $GITHUB_WORKSPACE/libs/openh264-build/armeabi-v7a/lib
           mkdir -p $GITHUB_WORKSPACE/libs/openh264-build/armeabi-v7a/include/wels
+          mkdir -p $GITHUB_WORKSPACE/libs/openh264-build/arm64-v8a/lib
+          mkdir -p $GITHUB_WORKSPACE/libs/openh264-build/arm64-v8a/include/wels
           
           # 下载预编译的 OpenH264 静态库
           cd $GITHUB_WORKSPACE/libs
@@ -152,33 +163,49 @@ jobs:
           # 安装必要的工具
           sudo apt-get install -y wget unzip
           
-          # 获取 Cisco 预编译的 OpenH264
-          echo "Setting up OpenH264 for armeabi-v7a"
-          
           # 从源代码克隆 OpenH264 以获取头文件
           if [ ! -d "openh264-${OPENH264_VERSION}" ]; then
             git clone -b v${OPENH264_VERSION} --depth 1 https://github.com/cisco/openh264.git openh264-${OPENH264_VERSION}
           fi
           
-          # 复制头文件
-          cp openh264-${OPENH264_VERSION}/codec/api/wels/*.h $GITHUB_WORKSPACE/libs/openh264-build/armeabi-v7a/include/wels/
+          # 获取 Cisco 预编译的 OpenH264
+          for ABI in armeabi-v7a arm64-v8a; do
+            echo "Setting up OpenH264 for $ABI"
+            
+            # 设置正确的 API 级别
+            if [[ "$ABI" == "armeabi-v7a" ]]; then
+              API_LEVEL=19
+            else
+              API_LEVEL=21
+            fi
+            
+            # 复制头文件
+            cp openh264-${OPENH264_VERSION}/codec/api/wels/*.h $GITHUB_WORKSPACE/libs/openh264-build/$ABI/include/wels/
+            
+            # 创建自定义静态库（这里用一个简单的空库替代，因为 PJSIP 实际上不会调用 OpenH264 的功能，仅用于编译）
+            cd $GITHUB_WORKSPACE/libs/openh264-build/$ABI/lib
+            
+            # 创建一个空的 C 文件
+            echo "void openh264_dummy_function() {}" > dummy.c
+            
+            # 编译并创建静态库
+            if [[ "$ABI" == "armeabi-v7a" ]]; then
+              ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi${API_LEVEL}-clang -c dummy.c -o dummy.o
+            else
+              ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${API_LEVEL}-clang -c dummy.c -o dummy.o
+            fi
+            
+            # 创建静态库
+            ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar rcs libopenh264.a dummy.o
+            
+            # 验证创建的库
+            ls -la
+          done
           
-          # 创建自定义静态库（这里用一个简单的空库替代，因为 PJSIP 实际上不会调用 OpenH264 的功能，仅用于编译）
-          cd $GITHUB_WORKSPACE/libs/openh264-build/armeabi-v7a/lib
+          echo "OpenH264 setup completed"
           
-          # 创建一个空的 C 文件
-          echo "void openh264_dummy_function() {}" > dummy.c
-          
-          # 编译并创建静态库 (使用传统GCC)
-          ${ANDROID_NDK_HOME}/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin/arm-linux-androideabi-gcc -c dummy.c -o dummy.o
-          
-          # 创建静态库
-          ${ANDROID_NDK_HOME}/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin/arm-linux-androideabi-ar rcs libopenh264.a dummy.o
-          
-          # 验证创建的库
-          ls -la
-          
-          # 构建32位PJSIP
+      - name: Configure and build PJSIP for Android
+        run: |
           cd $GITHUB_WORKSPACE/pjproject
           
           # 检查是否需要生成配置文件
@@ -212,221 +239,83 @@ jobs:
           # 显示创建的配置文件
           cat pjlib/include/pj/config_site.h
           
-          # 构建 armeabi-v7a (32位)
-          echo "Building PJSIP for armeabi-v7a with NDK 18"
-          export TARGET_ABI="armeabi-v7a"
-          
-          export OPENSSL_DIR=$GITHUB_WORKSPACE/libs/openssl-build/armeabi-v7a
-          export OPENH264_DIR=$GITHUB_WORKSPACE/libs/openh264-build/armeabi-v7a
-          
-          # 配置 PJSIP 构建环境以静态链接 SSL 和 H264
-          export LDFLAGS="-L$OPENSSL_DIR/lib -L$OPENH264_DIR/lib -static-libstdc++"
-          export CFLAGS="-I$OPENSSL_DIR/include -I$OPENH264_DIR/include"
-          export CPPFLAGS="-I$OPENSSL_DIR/include -I$OPENH264_DIR/include"
-          
-          # 设置 APP_PLATFORM 为 android-16 (与NDK 18兼容)
-          export APP_PLATFORM=android-16
-          ./configure-android \
-            --use-ndk-cflags \
-            --with-ssl=$OPENSSL_DIR \
-            --with-openh264=$OPENH264_DIR \
-            --disable-libwebrtc \
-            --disable-android-mediacodec
-          
-          # 检查配置是否成功
-          if [ $? -ne 0 ]; then
-            echo "配置失败，显示configure-android脚本内容:"
-            cat ./configure-android
-            exit 1
-          fi
-          
-          # 修改 PJSIP 的构建配置以静态链接 OpenSSL 和 OpenH264
-          if [ -f "pjlib/build/os-auto.mak" ]; then
-            echo "配置 PJSIP 以静态链接依赖库"
+          # 为两种架构构建 PJSIP
+          for ABI in armeabi-v7a arm64-v8a; do
+            echo "Building PJSIP for $ABI"
+            export TARGET_ABI="$ABI"
             
-            # 修改链接选项，确保静态链接 OpenSSL 和 OpenH264
-            sed -i 's|-lssl|-l:libssl.a|g' `find . -name "*.mak"`
-            sed -i 's|-lcrypto|-l:libcrypto.a|g' `find . -name "*.mak"`
-            sed -i 's|-lopenh264|-l:libopenh264.a|g' `find . -name "*.mak"`
+            # 设置正确的 API 级别
+            if [[ "$ABI" == "armeabi-v7a" ]]; then
+              API_LEVEL=19
+            else
+              API_LEVEL=21
+            fi
             
-            # 确保使用绝对路径
-            sed -i "s|-L/|-L$OPENSSL_DIR/lib -L$OPENH264_DIR/lib -L/|g" `find . -name "*.mak"`
-          fi
-          
-          # 编译PJSIP
-          echo "开始编译32位PJSIP..."
-          make dep && make
-          
-          # 如果编译失败，显示最后100行日志
-          if [ $? -ne 0 ]; then
-            echo "32位PJSIP编译失败，显示最后的编译日志:"
-            find . -name "*.log" -exec tail -n 100 {} \;
-            exit 1
-          fi
-          
-          # 创建输出目录
-          mkdir -p $GITHUB_WORKSPACE/output/pjsip/armeabi-v7a
-          
-          # 复制编译好的动态库文件
-          echo "复制PJSIP动态库文件到 armeabi-v7a 输出目录"
-          find . -name "*.so" -exec cp {} $GITHUB_WORKSPACE/output/pjsip/armeabi-v7a/ \; || echo "没有找到.so文件"
-          
-          # 验证生成的库
-          ls -la $GITHUB_WORKSPACE/output/pjsip/armeabi-v7a/ || echo "输出目录可能为空"
-          
-          # 清理构建
-          make distclean || true
-          
-          echo "32位PJSIP库构建完成"
-      
-      - name: Build OpenSSL and PJSIP for 64bit
-        run: |
-          # 设置64位NDK环境变量
-          export ANDROID_NDK_HOME=${NDK_HOME_64BIT}
-          echo "使用64位NDK: $ANDROID_NDK_HOME"
-          
-          # 构建64位OpenSSL
-          cd $GITHUB_WORKSPACE
-          cd libs/openssl-${OPENSSL_VERSION}
-          
-          # 确保工作空间 bin 目录存在
-          mkdir -p ${GITHUB_WORKSPACE}/bin
-          chmod 755 ${GITHUB_WORKSPACE}/bin
-          
-          # 构建64位架构的OpenSSL
-          ABI="arm64-v8a"
-          echo "Building OpenSSL for $ABI with NDK 21"
-          OPENSSL_ARCH="android-arm64"
+            export OPENSSL_DIR=$GITHUB_WORKSPACE/libs/openssl-build/$ABI
+            export OPENH264_DIR=$GITHUB_WORKSPACE/libs/openh264-build/$ABI
             
-          # 创建构建目录
-          mkdir -p $GITHUB_WORKSPACE/libs/openssl-build/$ABI
+            # 配置 PJSIP 构建环境以静态链接 SSL 和 H264
+            export LDFLAGS="-L$OPENSSL_DIR/lib -L$OPENH264_DIR/lib -static-libstdc++"
+            export CFLAGS="-I$OPENSSL_DIR/include -I$OPENH264_DIR/include"
+            export CPPFLAGS="-I$OPENSSL_DIR/include -I$OPENH264_DIR/include"
             
-          # 配置和构建
-          export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
-          # 设置 OpenSSL 编译环境
-          export ANDROID_NDK_ROOT=${ANDROID_NDK_HOME}
-          export PATH=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+            export APP_PLATFORM=android-$API_LEVEL
+            ./configure-android \
+              --use-ndk-cflags \
+              --with-ssl=$OPENSSL_DIR \
+              --with-openh264=$OPENH264_DIR \
+              --disable-libwebrtc \
+              --disable-android-mediacodec
             
-          # 为 NDK 21 的 OpenSSL 编译创建符号链接
-          ln -sf ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang ${GITHUB_WORKSPACE}/bin/aarch64-linux-android-gcc
-          ls -la ${GITHUB_WORKSPACE}/bin/
-          export PATH=${GITHUB_WORKSPACE}/bin:$PATH
-          echo "Current PATH: $PATH"
-          which aarch64-linux-android-gcc || echo "aarch64-linux-android-gcc not found in PATH after creating symlink"
+            # 检查配置是否成功
+            if [ $? -ne 0 ]; then
+              echo "配置失败，显示configure-android脚本内容:"
+              cat ./configure-android
+              exit 1
+            fi
             
-          # 配置OpenSSL
-          ./Configure $OPENSSL_ARCH -D__ANDROID_API__=21 --prefix=$GITHUB_WORKSPACE/libs/openssl-build/$ABI no-shared
+            # 修改 PJSIP 的构建配置以静态链接 OpenSSL 和 OpenH264
+            if [ -f "pjlib/build/os-auto.mak" ]; then
+              echo "配置 PJSIP 以静态链接依赖库"
+              
+              # 修改链接选项，确保静态链接 OpenSSL 和 OpenH264
+              sed -i 's|-lssl|-l:libssl.a|g' `find . -name "*.mak"`
+              sed -i 's|-lcrypto|-l:libcrypto.a|g' `find . -name "*.mak"`
+              sed -i 's|-lopenh264|-l:libopenh264.a|g' `find . -name "*.mak"`
+              
+              # 确保使用绝对路径
+              sed -i "s|-L/|-L$OPENSSL_DIR/lib -L$OPENH264_DIR/lib -L/|g" `find . -name "*.mak"`
+            fi
             
-          # 构建静态库
-          make -j$(nproc) clean
-          make -j$(nproc)
-          make install_sw
-          
-          # 构建64位OpenH264
-          cd $GITHUB_WORKSPACE
-          
-          # 创建存放预编译 OpenH264 的目录结构
-          mkdir -p $GITHUB_WORKSPACE/libs/openh264-build/arm64-v8a/lib
-          mkdir -p $GITHUB_WORKSPACE/libs/openh264-build/arm64-v8a/include/wels
-          
-          # 下载预编译的 OpenH264 静态库
-          cd $GITHUB_WORKSPACE/libs
-          
-          # 获取 Cisco 预编译的 OpenH264
-          echo "Setting up OpenH264 for arm64-v8a"
-          
-          # 复制头文件
-          cp openh264-${OPENH264_VERSION}/codec/api/wels/*.h $GITHUB_WORKSPACE/libs/openh264-build/arm64-v8a/include/wels/
-          
-          # 创建自定义静态库（这里用一个简单的空库替代，因为 PJSIP 实际上不会调用 OpenH264 的功能，仅用于编译）
-          cd $GITHUB_WORKSPACE/libs/openh264-build/arm64-v8a/lib
-          
-          # 创建一个空的 C 文件
-          echo "void openh264_dummy_function() {}" > dummy.c
-          
-          # 编译并创建静态库
-          ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang -c dummy.c -o dummy.o
-          
-          # 创建静态库
-          ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar rcs libopenh264.a dummy.o
-          
-          # 验证创建的库
-          ls -la
-          
-          # 构建64位PJSIP
-          cd $GITHUB_WORKSPACE/pjproject
-          
-          # 清理之前的构建
-          make distclean || true
-          
-          # 构建 arm64-v8a (64位)
-          echo "Building PJSIP for arm64-v8a with NDK 21"
-          export TARGET_ABI="arm64-v8a"
-          
-          export OPENSSL_DIR=$GITHUB_WORKSPACE/libs/openssl-build/arm64-v8a
-          export OPENH264_DIR=$GITHUB_WORKSPACE/libs/openh264-build/arm64-v8a
-          
-          # 配置 PJSIP 构建环境以静态链接 SSL 和 H264
-          export LDFLAGS="-L$OPENSSL_DIR/lib -L$OPENH264_DIR/lib -static-libstdc++"
-          export CFLAGS="-I$OPENSSL_DIR/include -I$OPENH264_DIR/include"
-          export CPPFLAGS="-I$OPENSSL_DIR/include -I$OPENH264_DIR/include"
-          
-          # 设置 APP_PLATFORM 为 android-21
-          export APP_PLATFORM=android-21
-          ./configure-android \
-            --use-ndk-cflags \
-            --with-ssl=$OPENSSL_DIR \
-            --with-openh264=$OPENH264_DIR \
-            --disable-libwebrtc \
-            --disable-android-mediacodec
-          
-          # 检查配置是否成功
-          if [ $? -ne 0 ]; then
-            echo "配置失败，显示configure-android脚本内容:"
-            cat ./configure-android
-            exit 1
-          fi
-          
-          # 修改 PJSIP 的构建配置以静态链接 OpenSSL 和 OpenH264
-          if [ -f "pjlib/build/os-auto.mak" ]; then
-            echo "配置 PJSIP 以静态链接依赖库"
+            # 编译PJSIP
+            echo "开始编译 PJSIP for $ABI..."
+            make dep && make
             
-            # 修改链接选项，确保静态链接 OpenSSL 和 OpenH264
-            sed -i 's|-lssl|-l:libssl.a|g' `find . -name "*.mak"`
-            sed -i 's|-lcrypto|-l:libcrypto.a|g' `find . -name "*.mak"`
-            sed -i 's|-lopenh264|-l:libopenh264.a|g' `find . -name "*.mak"`
+            # 如果编译失败，显示最后100行日志
+            if [ $? -ne 0 ]; then
+              echo "PJSIP编译失败，显示最后的编译日志:"
+              find . -name "*.log" -exec tail -n 100 {} \;
+              exit 1
+            fi
             
-            # 确保使用绝对路径
-            sed -i "s|-L/|-L$OPENSSL_DIR/lib -L$OPENH264_DIR/lib -L/|g" `find . -name "*.mak"`
-          fi
+            # 创建输出目录
+            mkdir -p $GITHUB_WORKSPACE/output/pjsip/$ABI
+            
+            # 复制编译好的动态库文件
+            echo "复制PJSIP动态库文件到 $ABI 输出目录"
+            find . -name "*.so" -exec cp {} $GITHUB_WORKSPACE/output/pjsip/$ABI/ \; || echo "没有找到.so文件"
+            
+            # 验证生成的库
+            ls -la $GITHUB_WORKSPACE/output/pjsip/$ABI/ || echo "输出目录可能为空"
+            
+            # 清理构建
+            make distclean || true
+          done
           
-          # 编译PJSIP
-          echo "开始编译64位PJSIP..."
-          make dep && make
-          
-          # 如果编译失败，显示最后100行日志
-          if [ $? -ne 0 ]; then
-            echo "64位PJSIP编译失败，显示最后的编译日志:"
-            find . -name "*.log" -exec tail -n 100 {} \;
-            exit 1
-          fi
-          
-          # 创建输出目录
-          mkdir -p $GITHUB_WORKSPACE/output/pjsip/arm64-v8a
-          
-          # 复制编译好的动态库文件
-          echo "复制PJSIP动态库文件到 arm64-v8a 输出目录"
-          find . -name "*.so" -exec cp {} $GITHUB_WORKSPACE/output/pjsip/arm64-v8a/ \; || echo "没有找到.so文件"
-          
-          # 验证生成的库
-          ls -la $GITHUB_WORKSPACE/output/pjsip/arm64-v8a/ || echo "输出目录可能为空"
-          
-          echo "64位PJSIP库构建完成"
+          echo "PJSIP library build completed"
       
       - name: Build PJSUA2 Java interface with SWIG
         run: |
-          # 使用64位NDK构建SWIG接口
-          export ANDROID_NDK_HOME=${NDK_HOME_64BIT}
           cd $GITHUB_WORKSPACE/pjproject
           
           # 设置JAVA_HOME环境变量
@@ -473,23 +362,12 @@ jobs:
           for ABI in armeabi-v7a arm64-v8a; do
             mkdir -p $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI
             
-            if [[ "$ABI" == "armeabi-v7a" ]]; then
-              NDK_PATH=${NDK_HOME_32BIT}
-            else
-              NDK_PATH=${NDK_HOME_64BIT}
-            fi
-            
             # 查找和复制libpjsua2.so
             # 使用之前已经构建的库
             cp $GITHUB_WORKSPACE/output/pjsip/$ABI/libpjsua2.so $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI/ || echo "未找到libpjsua2.so"
             
             # 复制libc++_shared.so (由NDK提供)
-            if [[ "$ABI" == "armeabi-v7a" ]]; then
-              # NDK 18 的 libc++_shared.so 位置可能不同
-              find ${NDK_PATH} -name "libc++_shared.so" | grep $ABI | xargs -I{} cp {} $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI/ || echo "复制libc++_shared.so失败"
-            else
-              cp ${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${ABI}/libc++_shared.so $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI/ || echo "复制libc++_shared.so失败"
-            fi
+            cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${ABI}/libc++_shared.so $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI/ || echo "复制libc++_shared.so失败"
           done
           
           # 验证输出
