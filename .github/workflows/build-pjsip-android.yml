@@ -30,7 +30,25 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential python3 python3-dev automake autoconf libtool pkg-config swig yasm nasm
+          sudo apt-get install -y build-essential python3 python3-dev automake autoconf libtool pkg-config yasm nasm
+          
+          # 安装 SWIG 4.0.2
+          cd $GITHUB_WORKSPACE
+          wget https://github.com/swig/swig/archive/refs/tags/v4.0.2.tar.gz
+          tar -xzf v4.0.2.tar.gz
+          cd swig-4.0.2
+          
+          # 安装SWIG的依赖项
+          sudo apt-get install -y libpcre3-dev bison
+          
+          # 配置和构建SWIG
+          ./autogen.sh
+          ./configure
+          make -j$(nproc)
+          sudo make install
+          
+          # 检查SWIG版本
+          swig -version
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -384,6 +402,9 @@ jobs:
           which javac || echo "javac not found!"
           javac -version || echo "javac command failed!"
           
+          # 检查SWIG版本
+          swig -version
+          
           # 导出必要的环境变量
           export PATH=$JAVA_HOME/bin:$PATH
           
@@ -395,9 +416,6 @@ jobs:
           
           # 显示目录内容
           ls -la
-          
-          # 检查SWIG版本
-          swig -version
           
           # 创建临时目录来存储SWIG编译结果
           mkdir -p $GITHUB_WORKSPACE/temp/swig
@@ -483,6 +501,34 @@ jobs:
           
           echo "PJSUA2 Java接口构建完成"
           
+      # 复制 OpenSSL 和 OpenH264 库到输出目录
+      - name: Copy OpenSSL and OpenH264 Libraries
+        run: |
+          # 创建输出目录
+          mkdir -p $GITHUB_WORKSPACE/output/openssl
+          mkdir -p $GITHUB_WORKSPACE/output/openh264
+          
+          # 复制 OpenSSL 库和头文件
+          for ABI in armeabi-v7a arm64-v8a; do
+            mkdir -p $GITHUB_WORKSPACE/output/openssl/$ABI
+            cp -r $GITHUB_WORKSPACE/libs/openssl-build/$ABI/lib $GITHUB_WORKSPACE/output/openssl/$ABI/
+            cp -r $GITHUB_WORKSPACE/libs/openssl-build/$ABI/include $GITHUB_WORKSPACE/output/openssl/$ABI/
+          done
+          
+          # 复制 OpenH264 库和头文件
+          for ABI in armeabi-v7a arm64-v8a; do
+            mkdir -p $GITHUB_WORKSPACE/output/openh264/$ABI
+            cp -r $GITHUB_WORKSPACE/libs/openh264-build/$ABI/lib $GITHUB_WORKSPACE/output/openh264/$ABI/
+            cp -r $GITHUB_WORKSPACE/libs/openh264-build/$ABI/include $GITHUB_WORKSPACE/output/openh264/$ABI/
+          done
+          
+          # 验证复制结果
+          echo "OpenSSL 输出目录内容:"
+          find $GITHUB_WORKSPACE/output/openssl -type f | sort
+          
+          echo "OpenH264 输出目录内容:"
+          find $GITHUB_WORKSPACE/output/openh264 -type f | sort
+          
       - name: Archive PJSIP artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -496,5 +542,21 @@ jobs:
         with:
           name: pjsua2-java-interface
           path: ${{ github.workspace }}/output/pjsua2
+          if-no-files-found: warn
+          retention-days: 7
+          
+      - name: Archive OpenSSL artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openssl-android-libs
+          path: ${{ github.workspace }}/output/openssl
+          if-no-files-found: warn
+          retention-days: 7
+          
+      - name: Archive OpenH264 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openh264-android-libs
+          path: ${{ github.workspace }}/output/openh264
           if-no-files-found: warn
           retention-days: 7
