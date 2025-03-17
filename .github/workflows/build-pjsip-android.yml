@@ -88,18 +88,23 @@ jobs:
           # 检查sock_bsd.c文件
           SOCK_BSD_PATH="pjlib/src/pj/sock_bsd.c"
           if [ -f "$SOCK_BSD_PATH" ]; then
+            # 显示原始文件中SO_NOSIGPIPE的使用情况
+            echo "原始文件中的SO_NOSIGPIPE用法:"
+            grep -n "SO_NOSIGPIPE" $SOCK_BSD_PATH
+            
             # 备份原始文件
             cp $SOCK_BSD_PATH ${SOCK_BSD_PATH}.bak
             
-            # 替换SO_NOSIGPIPE为PJ_SO_NOSIGPIPE
-            sed -i 's/SO_NOSIGPIPE/PJ_SO_NOSIGPIPE/g' $SOCK_BSD_PATH
+            # 仅修改有问题的那一行 - 在第589行附近
+            # 使用sed精确匹配只替换作为单独标识符的SO_NOSIGPIPE
+            sed -i 's/pj_sock_setsockopt(\*sock, pj_SOL_SOCKET(), SO_NOSIGPIPE/pj_sock_setsockopt(*sock, pj_SOL_SOCKET(), PJ_SO_NOSIGPIPE/g' $SOCK_BSD_PATH
             
-            # 检查修改是否成功
-            echo "修改后的sock_bsd.c文件中的SO_NOSIGPIPE出现次数:"
-            grep -c "SO_NOSIGPIPE" $SOCK_BSD_PATH || echo "未找到SO_NOSIGPIPE，修改可能已成功"
+            # 再次检查修改
+            echo "修改后的文件:"
+            grep -n "PJ_SO_NOSIGPIPE" $SOCK_BSD_PATH
             
-            echo "修改后的sock_bsd.c文件中的PJ_SO_NOSIGPIPE出现次数:"
-            grep -c "PJ_SO_NOSIGPIPE" $SOCK_BSD_PATH || echo "未找到PJ_SO_NOSIGPIPE"
+            # 确保没有引入新问题
+            grep -n "pj_PJ_SO_NOSIGPIPE" $SOCK_BSD_PATH && echo "警告: 检测到可能有问题的pj_PJ_SO_NOSIGPIPE"
             
             echo "sock_bsd.c补丁应用完成"
           else
@@ -338,6 +343,12 @@ jobs:
             if [ $? -ne 0 ]; then
               echo "PJSIP编译失败，显示最后的编译日志:"
               find . -name "*.log" -exec tail -n 100 {} \;
+              # 显示问题文件的内容
+              SOCK_BSD_PATH="pjlib/src/pj/sock_bsd.c"
+              if [ -f "$SOCK_BSD_PATH" ]; then
+                echo "sock_bsd.c 文件内容 (关键部分):"
+                grep -A 10 -B 10 "PJ_SO_NOSIGPIPE" $SOCK_BSD_PATH
+              fi
               exit 1
             fi
             
