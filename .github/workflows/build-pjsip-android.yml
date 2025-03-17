@@ -145,8 +145,8 @@ jobs:
           
           echo "OpenSSL build completed"
           
-          - name: Download and build OpenH264
-          run: |
+      - name: Configure and build PJSIP for Android
+        run: |
             # 确保工作空间目录存在
             mkdir -p $GITHUB_WORKSPACE/bin
             chmod 755 $GITHUB_WORKSPACE/bin
