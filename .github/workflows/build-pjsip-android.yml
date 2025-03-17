@@ -30,7 +30,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential python3 python3-dev automake autoconf libtool pkg-config
+          sudo apt-get install -y build-essential python3 python3-dev automake autoconf libtool pkg-config swig
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -217,15 +217,33 @@ jobs:
           # 检查是否需要生成配置文件
           if [ ! -f "configure" ]; then
             echo "Running autoconf to generate configure script"
-            ACLOCAL_ARGS="-I /usr/share/aclocal" ./aconfigure
+            autoreconf -i
           fi
+          
+          # 确保 configure-android 可执行
+          chmod +x ./configure-android
           
           # 清理之前的构建
           make distclean || true
           
-          # 首先创建config_site.h文件并添加自定义配置
-          mkdir -p pjlib/include/pj
-          cat > pjlib/include/pj/config_site.h << EOF
+            #           # 首先创建config_site.h文件并添加自定义配置
+            #           mkdir -p pjlib/include/pj
+            #           cat > pjlib/include/pj/config_site.h << 'EOF'
+            # #define PJ_CONFIG_ANDROID                   1
+
+            # #define PJMEDIA_HAS_VIDEO                   1
+            # #define PJMEDIA_HAS_OPENH264_CODEC          1
+            # #define PJMEDIA_VIDEO_DEV_HAS_ANDROID_MEDIACODEC 0
+            # #define PJMEDIA_HAS_ANDROID_MEDIACODEC 0
+            # #define PJMEDIA_VIDEO_DEV_HAS_ANDROID 1
+
+            # #define PJMEDIA_SRTP_HAS_DTLS               1
+            # #define PJMEDIA_SRTP_HAS_AES_GCM_256        1
+            # #define PJMEDIA_SRTP_HAS_AES_GCM_128        1
+            # EOF
+          
+          # 显示创建的配置文件
+          cat pjlib/include/pj/config_site.h
           
           # 只为 ARM 架构构建 PJSIP
           for ABI in armeabi-v7a arm64-v8a; do
@@ -236,14 +254,13 @@ jobs:
             export OPENH264_DIR=$GITHUB_WORKSPACE/libs/openh264-build/$ABI
             
             # 配置 PJSIP 构建环境以静态链接 SSL 和 H264
-            export LDFLAGS="$LDFLAGS -L$OPENSSL_DIR/lib -L$OPENH264_DIR/lib -static-libstdc++"
-            export CFLAGS="$CFLAGS -I$OPENSSL_DIR/include -I$OPENH264_DIR/include"
-            export CPPFLAGS="$CPPFLAGS -I$OPENSSL_DIR/include -I$OPENH264_DIR/include"
+            export LDFLAGS="-L$OPENSSL_DIR/lib -L$OPENH264_DIR/lib -static-libstdc++"
+            export CFLAGS="-I$OPENSSL_DIR/include -I$OPENH264_DIR/include"
+            export CPPFLAGS="-I$OPENSSL_DIR/include -I$OPENH264_DIR/include"
             
             if [[ "$ABI" == "armeabi-v7a" ]]; then
               # 设置 APP_PLATFORM 而不是使用 --min-sdk-version
               export APP_PLATFORM=android-19
-              # 删除不支持的参数
               ./configure-android \
                 --use-ndk-cflags \
                 --with-ssl=$OPENSSL_DIR \
@@ -260,6 +277,13 @@ jobs:
                 --disable-android-mediacodec
             fi
             
+            # 检查配置是否成功
+            if [ $? -ne 0 ]; then
+              echo "配置失败，显示configure-android脚本内容:"
+              cat ./configure-android
+              exit 1
+            fi
+            
             # 修改 PJSIP 的构建配置以静态链接 OpenSSL 和 OpenH264
             if [ -f "pjlib/build/os-auto.mak" ]; then
               echo "配置 PJSIP 以静态链接依赖库"
@@ -273,28 +297,96 @@ jobs:
               sed -i "s|-L/|-L$OPENSSL_DIR/lib -L$OPENH264_DIR/lib -L/|g" `find . -name "*.mak"`
             fi
             
-            make dep && make clean && make
+            # 编译PJSIP
+            echo "开始编译PJSIP..."
+            make dep && make
             
             # 创建输出目录
             mkdir -p $GITHUB_WORKSPACE/output/pjsip/$ABI
             
             # 复制编译好的动态库文件
-            echo "Copying PJSIP dynamic libraries for $ABI"
-            find . -name "*.so" | xargs -I{} cp {} $GITHUB_WORKSPACE/output/pjsip/$ABI/
+            echo "复制PJSIP动态库文件到 $ABI 输出目录"
+            find . -name "*.so" -exec cp {} $GITHUB_WORKSPACE/output/pjsip/$ABI/ \; || echo "没有找到.so文件"
             
             # 验证生成的库
-            ls -la $GITHUB_WORKSPACE/output/pjsip/$ABI/
-            
-            # 清理构建
-            cd $GITHUB_WORKSPACE/pjproject
-            make distclean
+            ls -la $GITHUB_WORKSPACE/output/pjsip/$ABI/ || echo "输出目录可能为空"
           done
           
-          echo "PJSIP build completed"
+          echo "PJSIP library build completed"
+      
+      - name: Build PJSUA2 Java interface with SWIG
+        run: |
+          cd $GITHUB_WORKSPACE/pjproject
+          
+          # 设置JAVA_HOME环境变量
+          export JAVA_HOME=${JAVA_HOME_17_X64}
+          echo "JAVA_HOME=$JAVA_HOME"
+          
+          # 检查javac是否可用
+          which javac || echo "javac not found!"
+          javac -version || echo "javac command failed!"
+          
+          # 导出必要的环境变量
+          export PATH=$JAVA_HOME/bin:$PATH
+          
+          # 创建输出目录
+          mkdir -p $GITHUB_WORKSPACE/output/pjsua2
+          
+          # 进入SWIG目录
+          cd pjsip-apps/src/swig
+          
+          # 显示目录内容
+          ls -la
+          
+          # 检查SWIG版本
+          swig -version
+          
+          # 编译SWIG接口
+          echo "开始构建PJSUA2 Java接口..."
+          make
+          
+          if [ $? -ne 0 ]; then
+            echo "SWIG构建失败!"
+            exit 1
+          fi
+          
+          # 检查生成的文件
+          echo "检查生成的Java接口文件:"
+          find java -type f | grep .java || echo "未找到生成的Java文件"
+          
+          # 复制Java文件
+          mkdir -p $GITHUB_WORKSPACE/output/pjsua2/java/org/pjsip/pjsua2
+          find java -name "*.java" -exec cp {} $GITHUB_WORKSPACE/output/pjsua2/java/org/pjsip/pjsua2/ \; || echo "复制Java文件失败"
+          
+          # 复制JNI库文件
+          for ABI in armeabi-v7a arm64-v8a; do
+            mkdir -p $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI
+            
+            # 查找和复制libpjsua2.so
+            find . -name "libpjsua2.so" -exec cp {} $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI/ \; || echo "未找到libpjsua2.so"
+            
+            # 复制libc++_shared.so (由NDK提供)
+            cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${ABI}/libc++_shared.so $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI/ || echo "复制libc++_shared.so失败"
+          done
+          
+          # 验证输出
+          echo "PJSUA2输出目录内容:"
+          ls -la $GITHUB_WORKSPACE/output/pjsua2 || echo "输出目录可能为空"
+          
+          echo "PJSUA2 Java接口构建完成"
           
       - name: Archive PJSIP artifacts
         uses: actions/upload-artifact@v4
         with:
           name: pjsip-android-libs
           path: ${{ github.workspace }}/output/pjsip
+          if-no-files-found: warn
+          retention-days: 7
+          
+      - name: Archive PJSUA2 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pjsua2-java-interface
+          path: ${{ github.workspace }}/output/pjsua2
+          if-no-files-found: warn
           retention-days: 7
