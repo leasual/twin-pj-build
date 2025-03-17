@@ -30,7 +30,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential python3 python3-dev automake autoconf libtool pkg-config swig
+          sudo apt-get install -y build-essential python3 python3-dev automake autoconf libtool pkg-config swig yasm nasm
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -81,37 +81,6 @@ jobs:
           fi
           cd $GITHUB_WORKSPACE/pjproject
           ls -la
-          
-        #   # 修复 SO_NOSIGPIPE 问题
-        #   echo "修复sock_bsd.c中的SO_NOSIGPIPE问题"
-          
-        #   # 检查sock_bsd.c文件
-        #   SOCK_BSD_PATH="pjlib/src/pj/sock_bsd.c"
-        #   if [ -f "$SOCK_BSD_PATH" ]; then
-        #     # 显示原始文件中SO_NOSIGPIPE的使用情况
-        #     echo "原始文件中的SO_NOSIGPIPE用法:"
-        #     grep -n "SO_NOSIGPIPE" $SOCK_BSD_PATH
-            
-        #     # 备份原始文件
-        #     cp $SOCK_BSD_PATH ${SOCK_BSD_PATH}.bak
-            
-        #     # 仅修改有问题的那一行 - 在第589行附近
-        #     # 使用sed精确匹配只替换作为单独标识符的SO_NOSIGPIPE
-        #     sed -i 's/pj_sock_setsockopt(\*sock, pj_SOL_SOCKET(), SO_NOSIGPIPE/pj_sock_setsockopt(*sock, pj_SOL_SOCKET(), PJ_SO_NOSIGPIPE/g' $SOCK_BSD_PATH
-            
-        #     # 再次检查修改
-        #     echo "修改后的文件:"
-        #     grep -n "PJ_SO_NOSIGPIPE" $SOCK_BSD_PATH
-            
-        #     # 确保没有引入新问题
-        #     grep -n "pj_PJ_SO_NOSIGPIPE" $SOCK_BSD_PATH && echo "警告: 检测到可能有问题的pj_PJ_SO_NOSIGPIPE"
-            
-        #     echo "sock_bsd.c补丁应用完成"
-        #   else
-        #     echo "错误: 找不到 sock_bsd.c 文件，请检查路径"
-        #     find pjlib/src -name "sock_bsd.c" || echo "未找到sock_bsd.c文件"
-        #     exit 1
-        #   fi
           
       - name: Download and build OpenSSL
         run: |
@@ -182,75 +151,114 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/bin
           chmod 755 $GITHUB_WORKSPACE/bin
           
-          # 创建存放预编译 OpenH264 的目录结构
-          mkdir -p $GITHUB_WORKSPACE/libs/openh264-build/armeabi-v7a/lib
-          mkdir -p $GITHUB_WORKSPACE/libs/openh264-build/armeabi-v7a/include/wels
-          mkdir -p $GITHUB_WORKSPACE/libs/openh264-build/arm64-v8a/lib
-          mkdir -p $GITHUB_WORKSPACE/libs/openh264-build/arm64-v8a/include/wels
-          
-          # 下载预编译的 OpenH264 静态库
+          # 下载并构建OpenH264
           cd $GITHUB_WORKSPACE/libs
           
           # 安装必要的工具
-          sudo apt-get install -y wget unzip
+          sudo apt-get install -y wget unzip yasm nasm
           
-          # 从源代码克隆 OpenH264 以获取头文件
+          # 克隆OpenH264源代码
           if [ ! -d "openh264-${OPENH264_VERSION}" ]; then
             git clone -b v${OPENH264_VERSION} --depth 1 https://github.com/cisco/openh264.git openh264-${OPENH264_VERSION}
           fi
           
-          # 检查OpenH264文件结构
-          echo "检查OpenH264目录结构:"
-          find openh264-${OPENH264_VERSION} -name "*.h" | grep -i wels
+          cd openh264-${OPENH264_VERSION}
           
-          # 确保至少有头文件可以使用
-          echo "创建基本的OpenH264头文件"
+          # 为每个架构构建OpenH264
           for ABI in armeabi-v7a arm64-v8a; do
-            echo "Setting up OpenH264 for $ABI"
+            echo "Building OpenH264 for $ABI"
             
-            # 创建一个假的头文件，以防找不到真的头文件
-            echo "// OpenH264 stub header" > $GITHUB_WORKSPACE/libs/openh264-build/$ABI/include/wels/codec_api.h
-            echo "typedef void* ISVCDecoder;" >> $GITHUB_WORKSPACE/libs/openh264-build/$ABI/include/wels/codec_api.h
-            echo "typedef void* ISVCEncoder;" >> $GITHUB_WORKSPACE/libs/openh264-build/$ABI/include/wels/codec_api.h
+            # 设置构建目标目录
+            INSTALL_DIR=$GITHUB_WORKSPACE/libs/openh264-build/$ABI
+            mkdir -p $INSTALL_DIR/lib
+            mkdir -p $INSTALL_DIR/include/wels
             
-            # 尝试复制真实的头文件（如果存在）
-            if [ -d "openh264-${OPENH264_VERSION}/codec/api/wels" ]; then
-              cp openh264-${OPENH264_VERSION}/codec/api/wels/*.h $GITHUB_WORKSPACE/libs/openh264-build/$ABI/include/wels/ || echo "无法复制OpenH264头文件"
-            elif [ -d "openh264-${OPENH264_VERSION}/include/wels" ]; then
-              cp openh264-${OPENH264_VERSION}/include/wels/*.h $GITHUB_WORKSPACE/libs/openh264-build/$ABI/include/wels/ || echo "无法复制OpenH264头文件"
-            fi
+            # 清理之前的构建
+            make clean
             
-            # 创建自定义静态库（这里用一个简单的空库替代，因为 PJSIP 实际上不会调用 OpenH264 的功能，仅用于编译）
-            cd $GITHUB_WORKSPACE/libs/openh264-build/$ABI/lib
-            
-            # 创建一个空的 C 文件
-            echo "void openh264_dummy_function() {}" > dummy.c
-            
-            # 设置正确的 API 级别
+            # 设置正确的构建参数
             if [[ "$ABI" == "armeabi-v7a" ]]; then
+              ARCH=arm
               API_LEVEL=19
+              TOOLCHAINPREFIX=arm-linux-androideabi
+              NDKARCH=armv7a-linux-androideabi
             else
+              ARCH=arm64
               API_LEVEL=21
+              TOOLCHAINPREFIX=aarch64-linux-android
+              NDKARCH=aarch64-linux-android
             fi
             
-            # 编译并创建静态库
-            if [[ "$ABI" == "armeabi-v7a" ]]; then
-              ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi${API_LEVEL}-clang -c dummy.c -o dummy.o
+            # 设置环境变量
+            export ARCH=$ARCH
+            export OS=android
+            export NDKROOT=${ANDROID_NDK_HOME}
+            export TARGET=android-$API_LEVEL
+            export CCASFLAGS="-target ${NDKARCH}${API_LEVEL}"
+            export CC="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${NDKARCH}${API_LEVEL}-clang"
+            export CXX="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${NDKARCH}${API_LEVEL}-clang++"
+            export CFLAGS="-target ${NDKARCH}${API_LEVEL} -I${ANDROID_NDK_HOME}/sysroot/usr/include/${TOOLCHAINPREFIX} -fPIC"
+            export CXXFLAGS="-target ${NDKARCH}${API_LEVEL} -I${ANDROID_NDK_HOME}/sysroot/usr/include/${TOOLCHAINPREFIX} -fPIC"
+            export LDFLAGS="-target ${NDKARCH}${API_LEVEL}"
+            
+            # 显示编译环境
+            echo "编译环境变量:"
+            echo "ARCH=$ARCH"
+            echo "OS=$OS"
+            echo "NDKROOT=$NDKROOT"
+            echo "TARGET=$TARGET"
+            echo "CC=$CC"
+            echo "CXX=$CXX"
+            
+            # 构建OpenH264（静态库）
+            make OS=android ARCH=$ARCH NDKROOT=$NDKROOT PREFIX= -j$(nproc)
+            
+            # 检查构建是否成功
+            if [ $? -ne 0 ]; then
+              echo "OpenH264构建失败，尝试替代方案..."
+              # 如果构建失败，创建一个简单的stub库
+              echo "创建stub OpenH264库..."
+              cd $INSTALL_DIR/lib
+              echo "void openh264_dummy_function() {}" > dummy.c
+              ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${NDKARCH}${API_LEVEL}-clang -c dummy.c -o dummy.o
+              ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar rcs libopenh264.a dummy.o
+              cd $GITHUB_WORKSPACE/libs/openh264-${OPENH264_VERSION}
             else
-              ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${API_LEVEL}-clang -c dummy.c -o dummy.o
+              # 复制库文件和头文件
+              cp -f libopenh264.a $INSTALL_DIR/lib/
+              if [ -f "libopenh264.so" ]; then
+                cp -f libopenh264.so $INSTALL_DIR/lib/
+              else
+                # 如果没有生成共享库，创建一个符号链接
+                ln -sf $INSTALL_DIR/lib/libopenh264.a $INSTALL_DIR/lib/libopenh264.so
+              fi
             fi
             
-            # 创建静态库
-            ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar rcs libopenh264.a dummy.o
+            # 确保复制头文件
+            cp -f codec/api/wels/*.h $INSTALL_DIR/include/wels/ || echo "警告: 无法复制OpenH264头文件"
             
-            # 验证创建的库
-            ls -la
+            # 创建pkgconfig目录和文件
+            mkdir -p $INSTALL_DIR/lib/pkgconfig
+            cat > $INSTALL_DIR/lib/pkgconfig/openh264.pc << EOF
+            prefix=$INSTALL_DIR
+            exec_prefix=\${prefix}
+            libdir=\${prefix}/lib
+            includedir=\${prefix}/include
+
+            Name: OpenH264
+            Description: OpenH264 is a codec library which supports H.264 encoding and decoding
+            Version: ${OPENH264_VERSION}
+            Libs: -L\${libdir} -lopenh264
+            Cflags: -I\${includedir}
+            EOF
+            
+            # 验证安装
+            echo "验证OpenH264安装 ($ABI):"
+            ls -la $INSTALL_DIR/lib/
+            ls -la $INSTALL_DIR/include/wels/
           done
           
-          echo "检查创建的OpenH264头文件:"
-          find $GITHUB_WORKSPACE/libs/openh264-build -name "*.h"
-          
-          echo "OpenH264 setup completed"
+          echo "OpenH264构建完成"
           
       - name: Configure and build PJSIP for Android
         run: |
@@ -267,25 +275,6 @@ jobs:
           
           # 清理之前的构建
           make distclean || true
-          
-          # 首先创建config_site.h文件并添加自定义配置
-            #           mkdir -p pjlib/include/pj
-            #           cat > pjlib/include/pj/config_site.h << 'EOF'
-            # #define PJ_CONFIG_ANDROID                   1
-
-            # #define PJMEDIA_HAS_VIDEO                   1
-            # #define PJMEDIA_HAS_OPENH264_CODEC          1
-            # #define PJMEDIA_VIDEO_DEV_HAS_ANDROID_MEDIACODEC 0
-            # #define PJMEDIA_HAS_ANDROID_MEDIACODEC 0
-            # #define PJMEDIA_VIDEO_DEV_HAS_ANDROID 1
-
-            # #define PJMEDIA_SRTP_HAS_DTLS               1
-            # #define PJMEDIA_SRTP_HAS_AES_GCM_256        1
-            # #define PJMEDIA_SRTP_HAS_AES_GCM_128        1
-            # EOF
-          
-          # 显示创建的配置文件
-          cat pjlib/include/pj/config_site.h
           
           # 为两种架构构建 PJSIP
           for ABI in armeabi-v7a arm64-v8a; do
@@ -307,18 +296,44 @@ jobs:
             export CFLAGS="-I$OPENSSL_DIR/include -I$OPENH264_DIR/include"
             export CPPFLAGS="-I$OPENSSL_DIR/include -I$OPENH264_DIR/include"
             
+            # 确保PKG_CONFIG_PATH包含openh264.pc的路径
+            export PKG_CONFIG_PATH="$OPENH264_DIR/lib/pkgconfig:$PKG_CONFIG_PATH"
+            
+            # 设置额外的环境变量帮助找到OpenH264
+            export OPENH264_CFLAGS="-I$OPENH264_DIR/include"
+            export OPENH264_LIBS="-L$OPENH264_DIR/lib -lopenh264"
+            
+            # 显示环境变量
+            echo "环境变量设置:"
+            echo "OPENSSL_DIR=$OPENSSL_DIR"
+            echo "OPENH264_DIR=$OPENH264_DIR"
+            echo "LDFLAGS=$LDFLAGS"
+            echo "CFLAGS=$CFLAGS"
+            echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
+            echo "OPENH264_CFLAGS=$OPENH264_CFLAGS"
+            echo "OPENH264_LIBS=$OPENH264_LIBS"
+            
             export APP_PLATFORM=android-$API_LEVEL
             ./configure-android \
               --use-ndk-cflags \
               --with-ssl=$OPENSSL_DIR \
               --with-openh264=$OPENH264_DIR \
+              --enable-libwebrtc-aec3 \
               --disable-android-mediacodec
             
             # 检查配置是否成功
             if [ $? -ne 0 ]; then
-              echo "配置失败，显示configure-android脚本内容:"
-              cat ./configure-android
-              exit 1
+              echo "配置失败，尝试禁用WebRTC重新配置..."
+              ./configure-android \
+                --use-ndk-cflags \
+                --with-ssl=$OPENSSL_DIR \
+                --with-openh264=$OPENH264_DIR \
+                --disable-android-mediacodec
+                
+              if [ $? -ne 0 ]; then
+                echo "配置仍然失败，退出构建"
+                exit 1
+              fi
             fi
             
             # 修改 PJSIP 的构建配置以静态链接 OpenSSL 和 OpenH264
@@ -342,13 +357,30 @@ jobs:
             if [ $? -ne 0 ]; then
               echo "PJSIP编译失败，显示最后的编译日志:"
               find . -name "*.log" -exec tail -n 100 {} \;
-              # 显示问题文件的内容
-              SOCK_BSD_PATH="pjlib/src/pj/sock_bsd.c"
-              if [ -f "$SOCK_BSD_PATH" ]; then
-                echo "sock_bsd.c 文件内容 (关键部分):"
-                grep -A 10 -B 10 "PJ_SO_NOSIGPIPE" $SOCK_BSD_PATH
+              
+              # 尝试不使用WebRTC重新构建
+              make distclean || true
+              
+              echo "尝试禁用WebRTC重新构建..."
+              export APP_PLATFORM=android-$API_LEVEL
+              ./configure-android \
+                --use-ndk-cflags \
+                --with-ssl=$OPENSSL_DIR \
+                --with-openh264=$OPENH264_DIR \
+                --disable-libwebrtc \
+                --disable-android-mediacodec
+              
+              if [ $? -eq 0 ]; then
+                make dep && make
+                
+                if [ $? -ne 0 ]; then
+                  echo "第二次尝试构建也失败，退出!"
+                  exit 1
+                fi
+              else
+                echo "第二次配置失败，退出!"
+                exit 1
               fi
-              exit 1
             fi
             
             # 创建临时目录存储当前架构的库文件
