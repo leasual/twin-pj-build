@@ -240,19 +240,16 @@ jobs:
             # 创建pkgconfig目录和文件
             mkdir -p $INSTALL_DIR/lib/pkgconfig
             
-            # 修复这里的here-document语法：删除前导空格并确保EOF在行首
-            cat > $INSTALL_DIR/lib/pkgconfig/openh264.pc << EOF
-            prefix=$INSTALL_DIR
-            exec_prefix=\${prefix}
-            libdir=\${prefix}/lib
-            includedir=\${prefix}/include
-
-            Name: OpenH264
-            Description: OpenH264 is a codec library which supports H.264 encoding and decoding
-            Version: ${OPENH264_VERSION}
-            Libs: -L\${libdir} -lopenh264
-            Cflags: -I\${includedir}
-            EOF
+            echo "prefix=$INSTALL_DIR" > $INSTALL_DIR/lib/pkgconfig/openh264.pc
+            echo "exec_prefix=\${prefix}" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
+            echo "libdir=\${prefix}/lib" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
+            echo "includedir=\${prefix}/include" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
+            echo "" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
+            echo "Name: OpenH264" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
+            echo "Description: OpenH264 is a codec library which supports H.264 encoding and decoding" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
+            echo "Version: ${OPENH264_VERSION}" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
+            echo "Libs: -L\${libdir} -lopenh264" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
+            echo "Cflags: -I\${includedir}" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
             
             # 验证安装
             echo "验证OpenH264安装 ($ABI):"
