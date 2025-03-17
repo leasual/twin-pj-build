@@ -223,17 +223,14 @@ jobs:
           # 清理之前的构建
           make distclean || true
           
+          # 首先创建config_site.h文件并添加自定义配置
+          mkdir -p pjlib/include/pj
+          cat > pjlib/include/pj/config_site.h << EOF
+          
           # 只为 ARM 架构构建 PJSIP
           for ABI in armeabi-v7a arm64-v8a; do
             echo "Building PJSIP for $ABI"
-            case $ABI in
-              armeabi-v7a)
-                TARGET_ABI="armeabi-v7a"
-                ;;
-              arm64-v8a)
-                TARGET_ABI="arm64-v8a"
-                ;;
-            esac
+            export TARGET_ABI="$ABI"
             
             export OPENSSL_DIR=$GITHUB_WORKSPACE/libs/openssl-build/$ABI
             export OPENH264_DIR=$GITHUB_WORKSPACE/libs/openh264-build/$ABI
@@ -243,31 +240,22 @@ jobs:
             export CFLAGS="$CFLAGS -I$OPENSSL_DIR/include -I$OPENH264_DIR/include"
             export CPPFLAGS="$CPPFLAGS -I$OPENSSL_DIR/include -I$OPENH264_DIR/include"
             
-            # 在构建后修改配置以禁用 MediaCodec 优先级
-            if [ -f "pjlib/include/pj/config_site.h" ]; then
-              echo "正在修改 config_site.h 以禁用 MediaCodec..."
-              echo "#define PJMEDIA_VIDEO_DEV_HAS_ANDROID_MEDIACODEC 0" >> pjlib/include/pj/config_site.h
-              echo "#define PJMEDIA_HAS_ANDROID_MEDIACODEC 0" >> pjlib/include/pj/config_site.h
-              echo "#define PJMEDIA_VIDEO_DEV_HAS_ANDROID 1" >> pjlib/include/pj/config_site.h
-              cat pjlib/include/pj/config_site.h
-            else
-              echo "警告: 找不到 config_site.h 文件"
-            fi
-            
             if [[ "$ABI" == "armeabi-v7a" ]]; then
-              TARGET_ABI=$TARGET_ABI ./configure-android \
+              # 设置 APP_PLATFORM 而不是使用 --min-sdk-version
+              export APP_PLATFORM=android-19
+              # 删除不支持的参数
+              ./configure-android \
                 --use-ndk-cflags \
                 --with-ssl=$OPENSSL_DIR \
                 --with-openh264=$OPENH264_DIR \
-                --min-sdk-version=19 \
                 --disable-libwebrtc \
                 --disable-android-mediacodec
             else
-              TARGET_ABI=$TARGET_ABI ./configure-android \
+              export APP_PLATFORM=android-21
+              ./configure-android \
                 --use-ndk-cflags \
                 --with-ssl=$OPENSSL_DIR \
                 --with-openh264=$OPENH264_DIR \
-                --min-sdk-version=21 \
                 --disable-libwebrtc \
                 --disable-android-mediacodec
             fi
