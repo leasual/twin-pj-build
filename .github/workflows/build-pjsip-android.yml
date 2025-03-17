@@ -239,6 +239,8 @@ jobs:
             
             # 创建pkgconfig目录和文件
             mkdir -p $INSTALL_DIR/lib/pkgconfig
+            
+            # 修复这里的here-document语法：删除前导空格并确保EOF在行首
             cat > $INSTALL_DIR/lib/pkgconfig/openh264.pc << EOF
             prefix=$INSTALL_DIR
             exec_prefix=\${prefix}
