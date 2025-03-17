@@ -248,6 +248,17 @@ jobs:
           
       - name: Checkout and build PJSIP
         run: |
+          # 移除所有 .so 文件，只保留 .a 文件
+          find $GITHUB_WORKSPACE/output/openssl -name "*.so" -delete
+          find $GITHUB_WORKSPACE/output/openh264 -name "*.so" -delete
+        
+          # 确认只有静态库存在
+          echo "确认 OpenSSL 目录中的库文件:"
+          find $GITHUB_WORKSPACE/output/openssl -name "lib*.a" | sort
+        
+          echo "确认 OpenH264 目录中的库文件:"
+          find $GITHUB_WORKSPACE/output/openh264 -name "lib*.a" | sort
+          
           # 如果 PJSIP 代码在仓库的根目录
           if [ -d "$GITHUB_WORKSPACE/pjsip" ]; then
             echo "Using PJSIP from repository at pjsip/"
