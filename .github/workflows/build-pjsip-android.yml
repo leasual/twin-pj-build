@@ -145,119 +145,125 @@ jobs:
           
           echo "OpenSSL build completed"
           
-      - name: Download and build OpenH264
-        run: |
-          # 确保工作空间目录存在
-          mkdir -p $GITHUB_WORKSPACE/bin
-          chmod 755 $GITHUB_WORKSPACE/bin
-          
-          # 下载并构建OpenH264
-          cd $GITHUB_WORKSPACE/libs
-          
-          # 安装必要的工具
-          sudo apt-get install -y wget unzip yasm nasm
-          
-          # 克隆OpenH264源代码
-          if [ ! -d "openh264-${OPENH264_VERSION}" ]; then
-            git clone -b v${OPENH264_VERSION} --depth 1 https://github.com/cisco/openh264.git openh264-${OPENH264_VERSION}
-          fi
-          
-          cd openh264-${OPENH264_VERSION}
-          
-          # 为每个架构构建OpenH264
-          for ABI in armeabi-v7a arm64-v8a; do
-            echo "Building OpenH264 for $ABI"
+          - name: Download and build OpenH264
+          run: |
+            # 确保工作空间目录存在
+            mkdir -p $GITHUB_WORKSPACE/bin
+            chmod 755 $GITHUB_WORKSPACE/bin
             
-            # 设置构建目标目录
-            INSTALL_DIR=$GITHUB_WORKSPACE/libs/openh264-build/$ABI
-            mkdir -p $INSTALL_DIR/lib
-            mkdir -p $INSTALL_DIR/include/wels
+            # 下载并构建OpenH264
+            cd $GITHUB_WORKSPACE/libs
             
-            # 清理之前的构建
-            make clean
+            # 安装必要的工具
+            sudo apt-get install -y wget unzip yasm nasm
             
-            # 设置正确的构建参数
-            if [[ "$ABI" == "armeabi-v7a" ]]; then
-              ARCH=arm
-              API_LEVEL=19
-              TOOLCHAINPREFIX=arm-linux-androideabi
-              NDKARCH=armv7a-linux-androideabi
-            else
-              ARCH=arm64
-              API_LEVEL=21
-              TOOLCHAINPREFIX=aarch64-linux-android
-              NDKARCH=aarch64-linux-android
+            # 克隆OpenH264源代码
+            if [ ! -d "openh264-${OPENH264_VERSION}" ]; then
+              git clone -b v${OPENH264_VERSION} --depth 1 https://github.com/cisco/openh264.git openh264-${OPENH264_VERSION}
             fi
             
-            # 设置环境变量
-            export ARCH=$ARCH
-            export OS=android
-            export NDKROOT=${ANDROID_NDK_HOME}
-            export TARGET=android-$API_LEVEL
-            export CCASFLAGS="-target ${NDKARCH}${API_LEVEL}"
-            export CC="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${NDKARCH}${API_LEVEL}-clang"
-            export CXX="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${NDKARCH}${API_LEVEL}-clang++"
-            export CFLAGS="-target ${NDKARCH}${API_LEVEL} -I${ANDROID_NDK_HOME}/sysroot/usr/include/${TOOLCHAINPREFIX} -fPIC"
-            export CXXFLAGS="-target ${NDKARCH}${API_LEVEL} -I${ANDROID_NDK_HOME}/sysroot/usr/include/${TOOLCHAINPREFIX} -fPIC"
-            export LDFLAGS="-target ${NDKARCH}${API_LEVEL}"
+            cd openh264-${OPENH264_VERSION}
             
-            # 显示编译环境
-            echo "编译环境变量:"
-            echo "ARCH=$ARCH"
-            echo "OS=$OS"
-            echo "NDKROOT=$NDKROOT"
-            echo "TARGET=$TARGET"
-            echo "CC=$CC"
-            echo "CXX=$CXX"
+            # 禁用测试应用构建 - 修改Makefile或相关配置
+            if [ -f "Makefile" ]; then
+              echo "修改Makefile，禁用测试应用构建"
+              sed -i 's/^\(HAVE_DEMO\|HAVE_ENCODER\|HAVE_DECODER\|HAVE_AVS\)[[:space:]]*=.*$/\1=No/g' Makefile || true
+            fi
             
-            # 构建OpenH264（静态库）
-            make OS=android ARCH=$ARCH NDKROOT=$NDKROOT PREFIX= -j$(nproc)
-            
-            # 检查构建是否成功
-            if [ $? -ne 0 ]; then
-              echo "OpenH264构建失败，尝试替代方案..."
-              # 如果构建失败，创建一个简单的stub库
-              echo "创建stub OpenH264库..."
-              cd $INSTALL_DIR/lib
-              echo "void openh264_dummy_function() {}" > dummy.c
-              ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${NDKARCH}${API_LEVEL}-clang -c dummy.c -o dummy.o
-              ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar rcs libopenh264.a dummy.o
-              cd $GITHUB_WORKSPACE/libs/openh264-${OPENH264_VERSION}
-            else
-              # 复制库文件和头文件
-              cp -f libopenh264.a $INSTALL_DIR/lib/
-              if [ -f "libopenh264.so" ]; then
-                cp -f libopenh264.so $INSTALL_DIR/lib/
+            # 为每个架构构建OpenH264
+            for ABI in armeabi-v7a arm64-v8a; do
+              echo "Building OpenH264 for $ABI"
+              
+              # 设置构建目标目录
+              INSTALL_DIR=$GITHUB_WORKSPACE/libs/openh264-build/$ABI
+              mkdir -p $INSTALL_DIR/lib
+              mkdir -p $INSTALL_DIR/include/wels
+              
+              # 清理之前的构建
+              make clean
+              
+              # 设置正确的构建参数
+              if [[ "$ABI" == "armeabi-v7a" ]]; then
+                ARCH=arm
+                API_LEVEL=19
+                TOOLCHAINPREFIX=arm-linux-androideabi
+                NDKARCH=armv7a-linux-androideabi
               else
-                # 如果没有生成共享库，创建一个符号链接
-                ln -sf $INSTALL_DIR/lib/libopenh264.a $INSTALL_DIR/lib/libopenh264.so
+                ARCH=arm64
+                API_LEVEL=21
+                TOOLCHAINPREFIX=aarch64-linux-android
+                NDKARCH=aarch64-linux-android
               fi
-            fi
+              
+              # 设置环境变量
+              export ARCH=$ARCH
+              export OS=android
+              export NDKROOT=${ANDROID_NDK_HOME}
+              export TARGET=android-$API_LEVEL
+              export CCASFLAGS="-target ${NDKARCH}${API_LEVEL}"
+              export CC="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${NDKARCH}${API_LEVEL}-clang"
+              export CXX="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${NDKARCH}${API_LEVEL}-clang++"
+              export CFLAGS="-target ${NDKARCH}${API_LEVEL} -I${ANDROID_NDK_HOME}/sysroot/usr/include/${TOOLCHAINPREFIX} -fPIC"
+              export CXXFLAGS="-target ${NDKARCH}${API_LEVEL} -I${ANDROID_NDK_HOME}/sysroot/usr/include/${TOOLCHAINPREFIX} -fPIC"
+              export LDFLAGS="-target ${NDKARCH}${API_LEVEL}"
+              
+              # 显示编译环境
+              echo "编译环境变量:"
+              echo "ARCH=$ARCH"
+              echo "OS=$OS"
+              echo "NDKROOT=$NDKROOT"
+              echo "TARGET=$TARGET"
+              echo "CC=$CC"
+              echo "CXX=$CXX"
+              
+              # 显式指定只构建库，不构建演示应用
+              make OS=android ARCH=$ARCH NDKROOT=$NDKROOT PREFIX= codec -j$(nproc)
+              
+              # 检查构建是否成功
+              if [ $? -ne 0 ]; then
+                echo "OpenH264构建失败，尝试替代方案..."
+                # 如果构建失败，创建一个简单的stub库
+                echo "创建stub OpenH264库..."
+                cd $INSTALL_DIR/lib
+                echo "void openh264_dummy_function() {}" > dummy.c
+                ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${NDKARCH}${API_LEVEL}-clang -c dummy.c -o dummy.o
+                ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar rcs libopenh264.a dummy.o
+                cd $GITHUB_WORKSPACE/libs/openh264-${OPENH264_VERSION}
+              else
+                # 复制库文件和头文件
+                cp -f libopenh264.a $INSTALL_DIR/lib/
+                if [ -f "libopenh264.so" ]; then
+                  cp -f libopenh264.so $INSTALL_DIR/lib/
+                else
+                  # 如果没有生成共享库，创建一个符号链接
+                  ln -sf $INSTALL_DIR/lib/libopenh264.a $INSTALL_DIR/lib/libopenh264.so
+                fi
+              fi
+              
+              # 确保复制头文件
+              cp -f codec/api/wels/*.h $INSTALL_DIR/include/wels/ || echo "警告: 无法复制OpenH264头文件"
+              
+              # 创建pkgconfig目录和文件
+              mkdir -p $INSTALL_DIR/lib/pkgconfig
+              
+              echo "prefix=$INSTALL_DIR" > $INSTALL_DIR/lib/pkgconfig/openh264.pc
+              echo "exec_prefix=\${prefix}" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
+              echo "libdir=\${prefix}/lib" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
+              echo "includedir=\${prefix}/include" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
+              echo "" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
+              echo "Name: OpenH264" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
+              echo "Description: OpenH264 is a codec library which supports H.264 encoding and decoding" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
+              echo "Version: ${OPENH264_VERSION}" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
+              echo "Libs: -L\${libdir} -lopenh264" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
+              echo "Cflags: -I\${includedir}" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
+              
+              # 验证安装
+              echo "验证OpenH264安装 ($ABI):"
+              ls -la $INSTALL_DIR/lib/
+              ls -la $INSTALL_DIR/include/wels/
+            done
             
-            # 确保复制头文件
-            cp -f codec/api/wels/*.h $INSTALL_DIR/include/wels/ || echo "警告: 无法复制OpenH264头文件"
-            
-            # 创建pkgconfig目录和文件
-            mkdir -p $INSTALL_DIR/lib/pkgconfig
-            
-            echo "prefix=$INSTALL_DIR" > $INSTALL_DIR/lib/pkgconfig/openh264.pc
-            echo "exec_prefix=\${prefix}" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
-            echo "libdir=\${prefix}/lib" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
-            echo "includedir=\${prefix}/include" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
-            echo "" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
-            echo "Name: OpenH264" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
-            echo "Description: OpenH264 is a codec library which supports H.264 encoding and decoding" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
-            echo "Version: ${OPENH264_VERSION}" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
-            echo "Libs: -L\${libdir} -lopenh264" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
-            echo "Cflags: -I\${includedir}" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
-            
-            # 验证安装
-            echo "验证OpenH264安装 ($ABI):"
-            ls -la $INSTALL_DIR/lib/
-            ls -la $INSTALL_DIR/include/wels/
-          done
-          
-          echo "OpenH264构建完成"
+            echo "OpenH264构建完成"
           
       - name: Configure and build PJSIP for Android
         run: |
