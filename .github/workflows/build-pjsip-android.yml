@@ -62,7 +62,7 @@ jobs:
           
       # 使用仓库中的 PJSIP 代码，假设 PJSIP 代码在仓库根目录的 pjsip 文件夹中
       # 如果代码在不同位置，请调整下面的路径
-      - name: Setup PJSIP
+      - name: Setup PJSIP and apply patches
         run: |
           # 如果 PJSIP 代码在仓库的根目录
           if [ -d "$GITHUB_WORKSPACE/pjsip" ]; then
@@ -81,6 +81,32 @@ jobs:
           fi
           cd $GITHUB_WORKSPACE/pjproject
           ls -la
+          
+          # 修复 SO_NOSIGPIPE 问题
+          echo "修复sock_bsd.c中的SO_NOSIGPIPE问题"
+          
+          # 检查sock_bsd.c文件
+          SOCK_BSD_PATH="pjlib/src/pj/sock_bsd.c"
+          if [ -f "$SOCK_BSD_PATH" ]; then
+            # 备份原始文件
+            cp $SOCK_BSD_PATH ${SOCK_BSD_PATH}.bak
+            
+            # 替换SO_NOSIGPIPE为PJ_SO_NOSIGPIPE
+            sed -i 's/SO_NOSIGPIPE/PJ_SO_NOSIGPIPE/g' $SOCK_BSD_PATH
+            
+            # 检查修改是否成功
+            echo "修改后的sock_bsd.c文件中的SO_NOSIGPIPE出现次数:"
+            grep -c "SO_NOSIGPIPE" $SOCK_BSD_PATH || echo "未找到SO_NOSIGPIPE，修改可能已成功"
+            
+            echo "修改后的sock_bsd.c文件中的PJ_SO_NOSIGPIPE出现次数:"
+            grep -c "PJ_SO_NOSIGPIPE" $SOCK_BSD_PATH || echo "未找到PJ_SO_NOSIGPIPE"
+            
+            echo "sock_bsd.c补丁应用完成"
+          else
+            echo "错误: 找不到 sock_bsd.c 文件，请检查路径"
+            find pjlib/src -name "sock_bsd.c" || echo "未找到sock_bsd.c文件"
+            exit 1
+          fi
           
       - name: Download and build OpenSSL
         run: |
