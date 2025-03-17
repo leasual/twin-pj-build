@@ -300,7 +300,6 @@ jobs:
               --use-ndk-cflags \
               --with-ssl=$OPENSSL_DIR \
               --with-openh264=$OPENH264_DIR \
-              --enable-libwebrtc-aec3 \
               --disable-android-mediacodec
             
             # 检查配置是否成功
@@ -349,7 +348,6 @@ jobs:
                 --use-ndk-cflags \
                 --with-ssl=$OPENSSL_DIR \
                 --with-openh264=$OPENH264_DIR \
-                --disable-libwebrtc \
                 --disable-android-mediacodec
               
               if [ $? -eq 0 ]; then
@@ -428,7 +426,8 @@ jobs:
           
           # 检查生成的libpjsua2.so文件
           echo "检查生成的libpjsua2.so文件:"
-          find . -name "libpjsua2.so" || echo "未找到libpjsua2.so文件"
+          LIBPJSUA2_PATHS=$(find . -name "libpjsua2.so")
+          echo "$LIBPJSUA2_PATHS" || echo "未找到libpjsua2.so文件"
           
           # 创建输出目录结构
           for ABI in armeabi-v7a arm64-v8a; do
@@ -441,12 +440,34 @@ jobs:
               cp $GITHUB_WORKSPACE/temp/pjsip/$ABI/*.so $GITHUB_WORKSPACE/output/pjsip/$ABI/ || echo "没有找到PJSIP库文件"
             fi
             
-            # 复制libpjsua2.so到jniLibs目录
-            # 注意：SWIG可能会在特定目录生成libpjsua2.so
-            find $GITHUB_WORKSPACE/pjproject -name "libpjsua2.so" -exec cp {} $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI/ \; || echo "未找到libpjsua2.so"
-            
-            # 复制libc++_shared.so (由NDK提供)
-            cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${ABI}/libc++_shared.so $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI/ || echo "复制libc++_shared.so失败"
+            # 查找并复制libpjsua2.so文件
+            PJSUA2_SO=$(find $GITHUB_WORKSPACE/pjproject -name "libpjsua2.so" | head -1)
+            if [ -f "$PJSUA2_SO" ]; then
+              echo "找到libpjsua2.so: $PJSUA2_SO"
+              # 获取libpjsua2.so所在目录
+              PJSUA2_DIR=$(dirname "$PJSUA2_SO")
+              
+              # 复制libpjsua2.so到jniLibs目录
+              cp "$PJSUA2_SO" $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI/
+              
+              # 在同一目录查找libc++_shared.so
+              if [ -f "$PJSUA2_DIR/libc++_shared.so" ]; then
+                echo "找到libc++_shared.so在libpjsua2.so同目录"
+                cp "$PJSUA2_DIR/libc++_shared.so" $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI/
+              else
+                # 尝试全局查找
+                echo "在libpjsua2.so目录未找到libc++_shared.so，尝试全局查找"
+                LIBCPP_PATH=$(find ${ANDROID_NDK_HOME} -name "libc++_shared.so" | grep "$ABI" | head -1)
+                if [ -f "$LIBCPP_PATH" ]; then
+                  echo "找到libc++_shared.so: $LIBCPP_PATH"
+                  cp "$LIBCPP_PATH" $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI/
+                else
+                  echo "找不到$ABI架构的libc++_shared.so"
+                fi
+              fi
+            else
+              echo "未找到libpjsua2.so文件"
+            fi
           done
           
           # 复制Java文件
