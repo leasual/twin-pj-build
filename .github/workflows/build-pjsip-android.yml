@@ -78,29 +78,30 @@ jobs:
           echo "可用的编译器工具:"
           ls -la ${ANDROID_HOME}/ndk/21.4.7075529/toolchains/llvm/prebuilt/linux-x86_64/bin/ | grep "arm"
           
-      # 使用仓库中的 PJSIP 代码，假设 PJSIP 代码在仓库根目录的 pjsip 文件夹中
-      # 如果代码在不同位置，请调整下面的路径
-      - name: Setup PJSIP and apply patches
+      # 创建输出目录结构
+      - name: Setup output directories
         run: |
-          # 如果 PJSIP 代码在仓库的根目录
-          if [ -d "$GITHUB_WORKSPACE/pjsip" ]; then
-            echo "Using PJSIP from repository at pjsip/"
-            mkdir -p $GITHUB_WORKSPACE/pjproject
-            cp -r $GITHUB_WORKSPACE/pjsip/* $GITHUB_WORKSPACE/pjproject/
-          # 如果 PJSIP 代码就是整个仓库内容
-          elif [ -f "$GITHUB_WORKSPACE/configure-android" ]; then
-            echo "Using PJSIP from repository root"
-            mkdir -p $GITHUB_WORKSPACE/pjproject
-            cp -r $GITHUB_WORKSPACE/* $GITHUB_WORKSPACE/pjproject/
-          # 如果找不到 PJSIP 代码，则从官方仓库克隆
-          else
-            echo "PJSIP code not found in repository, cloning from official repo"
-            git clone -b ${PJSIP_VERSION} --depth 1 https://github.com/pjsip/pjproject.git
-          fi
-          cd $GITHUB_WORKSPACE/pjproject
-          ls -la
+          # 创建 OpenSSL 和 OpenH264 输出目录
+          mkdir -p $GITHUB_WORKSPACE/output/openssl/armeabi-v7a/lib
+          mkdir -p $GITHUB_WORKSPACE/output/openssl/armeabi-v7a/include
+          mkdir -p $GITHUB_WORKSPACE/output/openssl/arm64-v8a/lib
+          mkdir -p $GITHUB_WORKSPACE/output/openssl/arm64-v8a/include
           
-      - name: Download and build OpenSSL
+          mkdir -p $GITHUB_WORKSPACE/output/openh264/armeabi-v7a/lib
+          mkdir -p $GITHUB_WORKSPACE/output/openh264/armeabi-v7a/include
+          mkdir -p $GITHUB_WORKSPACE/output/openh264/arm64-v8a/lib
+          mkdir -p $GITHUB_WORKSPACE/output/openh264/arm64-v8a/include
+          
+          # 创建 PJSIP 输出目录
+          mkdir -p $GITHUB_WORKSPACE/output/pjsip/armeabi-v7a
+          mkdir -p $GITHUB_WORKSPACE/output/pjsip/arm64-v8a
+          
+          # 创建 PJSUA2 输出目录
+          mkdir -p $GITHUB_WORKSPACE/output/pjsua2/jniLibs/armeabi-v7a
+          mkdir -p $GITHUB_WORKSPACE/output/pjsua2/jniLibs/arm64-v8a
+          mkdir -p $GITHUB_WORKSPACE/output/pjsua2/java/org/pjsip/pjsua2
+          
+      - name: Build and prepare OpenSSL
         run: |
           cd $GITHUB_WORKSPACE
           mkdir -p libs
@@ -159,11 +160,15 @@ jobs:
             make -j$(nproc) clean
             make -j$(nproc)
             make install_sw
+            
+            # 将构建结果复制到输出目录
+            cp -r $GITHUB_WORKSPACE/libs/openssl-build/$ABI/lib/* $GITHUB_WORKSPACE/output/openssl/$ABI/lib/
+            cp -r $GITHUB_WORKSPACE/libs/openssl-build/$ABI/include/* $GITHUB_WORKSPACE/output/openssl/$ABI/include/
           done
           
           echo "OpenSSL build completed"
           
-      - name: Configure and build OpenH264
+      - name: Build and prepare OpenH264
         run: |
             # 确保工作空间目录存在
             mkdir -p $GITHUB_WORKSPACE/bin
@@ -187,8 +192,7 @@ jobs:
               echo "Building OpenH264 for $ABI"
               
               # 设置构建目标目录
-              INSTALL_DIR=$GITHUB_WORKSPACE/libs/openh264-build/$ABI
-              mkdir -p $INSTALL_DIR
+              INSTALL_DIR=$GITHUB_WORKSPACE/output/openh264/$ABI
               
               # 设置正确的构建参数
               if [[ "$ABI" == "armeabi-v7a" ]]; then
@@ -238,30 +242,27 @@ jobs:
                 echo "Libs: -L\${libdir} -lopenh264" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
                 echo "Cflags: -I\${includedir}" >> $INSTALL_DIR/lib/pkgconfig/openh264.pc
               fi
-              
-              # 创建备份方案，如果安装失败
-              if [ ! -f "$INSTALL_DIR/lib/libopenh264.a" ] && [ ! -f "$INSTALL_DIR/lib/libopenh264.so" ]; then
-                echo "OpenH264安装似乎失败，创建stub库..."
-                mkdir -p $INSTALL_DIR/lib
-                mkdir -p $INSTALL_DIR/include/wels
-                
-                cd $INSTALL_DIR/lib
-                echo "void openh264_dummy_function() {}" > dummy.c
-                ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${NDKARCH}${API_LEVEL}-clang -c dummy.c -o dummy.o
-                ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar rcs libopenh264.a dummy.o
-                ln -sf libopenh264.a libopenh264.so
-                
-                cd $GITHUB_WORKSPACE/libs/openh264-${OPENH264_VERSION}
-                
-                # 复制任何可能存在的头文件
-                cp -f codec/api/wels/*.h $INSTALL_DIR/include/wels/ 2>/dev/null || echo "警告: 无法复制OpenH264头文件"
-              fi
             done
             
             echo "OpenH264构建完成"
           
-      - name: Configure and build PJSIP for Android
+      - name: Checkout and build PJSIP
         run: |
+          # 如果 PJSIP 代码在仓库的根目录
+          if [ -d "$GITHUB_WORKSPACE/pjsip" ]; then
+            echo "Using PJSIP from repository at pjsip/"
+            mkdir -p $GITHUB_WORKSPACE/pjproject
+            cp -r $GITHUB_WORKSPACE/pjsip/* $GITHUB_WORKSPACE/pjproject/
+          # 如果 PJSIP 代码就是整个仓库内容
+          elif [ -f "$GITHUB_WORKSPACE/configure-android" ]; then
+            echo "Using PJSIP from repository root"
+            mkdir -p $GITHUB_WORKSPACE/pjproject
+            cp -r $GITHUB_WORKSPACE/* $GITHUB_WORKSPACE/pjproject/
+          # 如果找不到 PJSIP 代码，则从官方仓库克隆
+          else
+            echo "PJSIP code not found in repository, cloning from official repo"
+            git clone -b ${PJSIP_VERSION} --depth 1 https://github.com/pjsip/pjproject.git
+          fi
           cd $GITHUB_WORKSPACE/pjproject
           
           # 检查是否需要生成配置文件
@@ -288,11 +289,11 @@ jobs:
               API_LEVEL=21
             fi
             
-            export OPENSSL_DIR=$GITHUB_WORKSPACE/libs/openssl-build/$ABI
-            export OPENH264_DIR=$GITHUB_WORKSPACE/libs/openh264-build/$ABI
+            export OPENSSL_DIR=$GITHUB_WORKSPACE/output/openssl/$ABI
+            export OPENH264_DIR=$GITHUB_WORKSPACE/output/openh264/$ABI
             
-            # 配置 PJSIP 构建环境以静态链接 SSL 和 H264
-            export LDFLAGS="-L$OPENSSL_DIR/lib -L$OPENH264_DIR/lib -static-libstdc++"
+            # 配置 PJSIP 构建环境
+            export LDFLAGS="-L$OPENSSL_DIR/lib -L$OPENH264_DIR/lib"
             export CFLAGS="-I$OPENSSL_DIR/include -I$OPENH264_DIR/include"
             export CPPFLAGS="-I$OPENSSL_DIR/include -I$OPENH264_DIR/include"
             
@@ -322,30 +323,18 @@ jobs:
             
             # 检查配置是否成功
             if [ $? -ne 0 ]; then
-              echo "配置失败，尝试禁用WebRTC重新配置..."
+              echo "配置失败，尝试禁用更多功能重新配置..."
               ./configure-android \
                 --use-ndk-cflags \
                 --with-ssl=$OPENSSL_DIR \
                 --with-openh264=$OPENH264_DIR \
-                --disable-android-mediacodec
+                --disable-android-mediacodec \
+                --disable-libwebrtc
                 
               if [ $? -ne 0 ]; then
                 echo "配置仍然失败，退出构建"
                 exit 1
               fi
-            fi
-            
-            # 修改 PJSIP 的构建配置以静态链接 OpenSSL 和 OpenH264
-            if [ -f "pjlib/build/os-auto.mak" ]; then
-              echo "配置 PJSIP 以静态链接依赖库"
-              
-              # 修改链接选项，确保静态链接 OpenSSL 和 OpenH264
-              sed -i 's|-lssl|-l:libssl.a|g' `find . -name "*.mak"`
-              sed -i 's|-lcrypto|-l:libcrypto.a|g' `find . -name "*.mak"`
-              sed -i 's|-lopenh264|-l:libopenh264.a|g' `find . -name "*.mak"`
-              
-              # 确保使用绝对路径
-              sed -i "s|-L/|-L$OPENSSL_DIR/lib -L$OPENH264_DIR/lib -L/|g" `find . -name "*.mak"`
             fi
             
             # 编译PJSIP
@@ -356,41 +345,16 @@ jobs:
             if [ $? -ne 0 ]; then
               echo "PJSIP编译失败，显示最后的编译日志:"
               find . -name "*.log" -exec tail -n 100 {} \;
-              
-              # 尝试不使用WebRTC重新构建
-              make distclean || true
-              
-              echo "尝试禁用WebRTC重新构建..."
-              export APP_PLATFORM=android-$API_LEVEL
-              ./configure-android \
-                --use-ndk-cflags \
-                --with-ssl=$OPENSSL_DIR \
-                --with-openh264=$OPENH264_DIR \
-                --disable-android-mediacodec
-              
-              if [ $? -eq 0 ]; then
-                make dep && make
-                
-                if [ $? -ne 0 ]; then
-                  echo "第二次尝试构建也失败，退出!"
-                  exit 1
-                fi
-              else
-                echo "第二次配置失败，退出!"
-                exit 1
-              fi
+              exit 1
             fi
             
-            # 创建临时目录存储当前架构的库文件
-            mkdir -p $GITHUB_WORKSPACE/temp/pjsip/$ABI
-            find . -name "*.so" -exec cp {} $GITHUB_WORKSPACE/temp/pjsip/$ABI/ \; || echo "没有找到.so文件"
-            
-            # 不要在这里清理构建，因为后面需要这些构建文件来编译SWIG
+            # 复制编译好的库文件到输出目录
+            find . -name "*.so" -exec cp {} $GITHUB_WORKSPACE/output/pjsip/$ABI/ \; || echo "没有找到.so文件"
           done
           
           echo "PJSIP库构建完成，现在开始构建PJSUA2 Java接口"
       
-      - name: Build PJSUA2 Java interface with SWIG
+      - name: Build PJSUA2 Java interface
         run: |
           cd $GITHUB_WORKSPACE/pjproject
           
@@ -408,17 +372,11 @@ jobs:
           # 导出必要的环境变量
           export PATH=$JAVA_HOME/bin:$PATH
           
-          # 创建输出目录
-          mkdir -p $GITHUB_WORKSPACE/output/pjsua2
-          
           # 进入SWIG目录
           cd pjsip-apps/src/swig
           
           # 显示目录内容
           ls -la
-          
-          # 创建临时目录来存储SWIG编译结果
-          mkdir -p $GITHUB_WORKSPACE/temp/swig
           
           # 修改Makefile以输出更多编译信息（如果需要）
           if [ -f "Makefile" ]; then
@@ -447,50 +405,69 @@ jobs:
           LIBPJSUA2_PATHS=$(find . -name "libpjsua2.so")
           echo "$LIBPJSUA2_PATHS" || echo "未找到libpjsua2.so文件"
           
-          # 创建输出目录结构
+          # 复制Java文件，保持原目录结构
+          echo "复制Java文件，保持原目录结构..."
+          # 首先确保目标目录存在
+          mkdir -p $GITHUB_WORKSPACE/output/pjsua2/java
+
+          # 查找所有Java文件的根目录
+          JAVA_SRC_DIR=$(find . -name "*.java" | grep -i pjsua2 | head -1 | xargs dirname)
+          if [ -n "$JAVA_SRC_DIR" ]; then
+          echo "找到Java文件的根目录: $JAVA_SRC_DIR"
+          # 确定源目录
+          SOURCE_DIR=$(cd $JAVA_SRC_DIR/../.. && pwd)
+          echo "Java源目录: $SOURCE_DIR"
+            
+          # 复制整个org目录结构
+          if [ -d "$SOURCE_DIR/org" ]; then
+              echo "复制org目录到输出位置..."
+              cp -r $SOURCE_DIR/org $GITHUB_WORKSPACE/output/pjsua2/java/
+          else
+              echo "在 $SOURCE_DIR 中未找到org目录"
+                
+              # 如果没有找到org目录，尝试按文件复制
+              echo "尝试单独复制Java文件..."
+              find . -name "*.java" | while read file; do
+              # 获取文件相对路径
+              REL_PATH=$(echo $file | grep -o 'org/.*')
+              if [ -n "$REL_PATH" ]; then
+                  # 创建目标目录
+                  TARGET_DIR=$(dirname "$GITHUB_WORKSPACE/output/pjsua2/java/$REL_PATH")
+                  mkdir -p $TARGET_DIR
+                  # 复制文件
+                  cp $file "$GITHUB_WORKSPACE/output/pjsua2/java/$REL_PATH"
+              else
+                  echo "无法确定 $file 的相对路径，直接复制到pjsua2目录"
+                  cp $file $GITHUB_WORKSPACE/output/pjsua2/java/org/pjsip/pjsua2/
+              fi
+              done
+          fi
+          else
+          echo "未找到任何Java文件"
+          fi
+          
+          # 复制库文件
           for ABI in armeabi-v7a arm64-v8a; do
-            # 为每个架构创建目录
-            mkdir -p $GITHUB_WORKSPACE/output/pjsip/$ABI
-            mkdir -p $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI
-            
-            # 复制之前编译的PJSIP库文件
-            if [ -d "$GITHUB_WORKSPACE/temp/pjsip/$ABI" ]; then
-              cp $GITHUB_WORKSPACE/temp/pjsip/$ABI/*.so $GITHUB_WORKSPACE/output/pjsip/$ABI/ || echo "没有找到PJSIP库文件"
-            fi
-            
             # 查找并复制libpjsua2.so文件
             PJSUA2_SO=$(find $GITHUB_WORKSPACE/pjproject -name "libpjsua2.so" | head -1)
             if [ -f "$PJSUA2_SO" ]; then
               echo "找到libpjsua2.so: $PJSUA2_SO"
-              # 获取libpjsua2.so所在目录
-              PJSUA2_DIR=$(dirname "$PJSUA2_SO")
               
               # 复制libpjsua2.so到jniLibs目录
               cp "$PJSUA2_SO" $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI/
               
-              # 在同一目录查找libc++_shared.so
-              if [ -f "$PJSUA2_DIR/libc++_shared.so" ]; then
-                echo "找到libc++_shared.so在libpjsua2.so同目录"
-                cp "$PJSUA2_DIR/libc++_shared.so" $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI/
+              # 尝试查找libc++_shared.so
+              LIBCPP_PATH=$(find ${ANDROID_NDK_HOME} -name "libc++_shared.so" | grep "$ABI" | head -1)
+              if [ -f "$LIBCPP_PATH" ]; then
+                echo "找到libc++_shared.so: $LIBCPP_PATH"
+                cp "$LIBCPP_PATH" $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI/
               else
-                # 尝试全局查找
-                echo "在libpjsua2.so目录未找到libc++_shared.so，尝试全局查找"
-                LIBCPP_PATH=$(find ${ANDROID_NDK_HOME} -name "libc++_shared.so" | grep "$ABI" | head -1)
-                if [ -f "$LIBCPP_PATH" ]; then
-                  echo "找到libc++_shared.so: $LIBCPP_PATH"
-                  cp "$LIBCPP_PATH" $GITHUB_WORKSPACE/output/pjsua2/jniLibs/$ABI/
-                else
-                  echo "找不到$ABI架构的libc++_shared.so"
-                fi
+                echo "找不到$ABI架构的libc++_shared.so"
               fi
             else
               echo "未找到libpjsua2.so文件"
             fi
           done
-          
-          # 复制Java文件
-          mkdir -p $GITHUB_WORKSPACE/output/pjsua2/java/org/pjsip/pjsua2
-          find . -name "*.java" -exec cp {} $GITHUB_WORKSPACE/output/pjsua2/java/org/pjsip/pjsua2/ \; || echo "复制Java文件失败"
           
           # 验证所有输出
           echo "最终PJSIP输出目录内容:"
@@ -500,34 +477,6 @@ jobs:
           find $GITHUB_WORKSPACE/output/pjsua2 -type f | sort
           
           echo "PJSUA2 Java接口构建完成"
-          
-      # 复制 OpenSSL 和 OpenH264 库到输出目录
-      - name: Copy OpenSSL and OpenH264 Libraries
-        run: |
-          # 创建输出目录
-          mkdir -p $GITHUB_WORKSPACE/output/openssl
-          mkdir -p $GITHUB_WORKSPACE/output/openh264
-          
-          # 复制 OpenSSL 库和头文件
-          for ABI in armeabi-v7a arm64-v8a; do
-            mkdir -p $GITHUB_WORKSPACE/output/openssl/$ABI
-            cp -r $GITHUB_WORKSPACE/libs/openssl-build/$ABI/lib $GITHUB_WORKSPACE/output/openssl/$ABI/
-            cp -r $GITHUB_WORKSPACE/libs/openssl-build/$ABI/include $GITHUB_WORKSPACE/output/openssl/$ABI/
-          done
-          
-          # 复制 OpenH264 库和头文件
-          for ABI in armeabi-v7a arm64-v8a; do
-            mkdir -p $GITHUB_WORKSPACE/output/openh264/$ABI
-            cp -r $GITHUB_WORKSPACE/libs/openh264-build/$ABI/lib $GITHUB_WORKSPACE/output/openh264/$ABI/
-            cp -r $GITHUB_WORKSPACE/libs/openh264-build/$ABI/include $GITHUB_WORKSPACE/output/openh264/$ABI/
-          done
-          
-          # 验证复制结果
-          echo "OpenSSL 输出目录内容:"
-          find $GITHUB_WORKSPACE/output/openssl -type f | sort
-          
-          echo "OpenH264 输出目录内容:"
-          find $GITHUB_WORKSPACE/output/openh264 -type f | sort
           
       - name: Archive PJSIP artifacts
         uses: actions/upload-artifact@v4
