@@ -28,12 +28,5 @@
 #define PJSIP_TCP_KEEP_ALIVE_INTERVAL       20
 #define PJSIP_TLS_KEEP_ALIVE_INTERVAL       20
 
-//fix iOS 16 and Xcode 14 bug
-//linked against modern SDK, VOIP socket will not wake error. 
-// #define PJ_IPHONE_OS_HAS_MULTITASKING_SUPPORT 1
-// #define PJ_ACTIVESOCK_TCP_IPHONE_OS_BG      0
-
-//auth use SHA-256
-#define PJSIP_AUTH_HAS_DIGEST_SHA256         1
 
 #include <pj/config_site_sample.h>
